@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jump-image-datasets"
+version = "0.1.0"
+description = "Download and access JUMP image datasets and metadata."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "WayScience" }]
+dependencies = [
+  "pandas>=1.5",
+  "pyarrow>=23.0.1",
+  "s3fs>=2023.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/WayScience/jump_image_data_downloader"
+Repository = "https://github.com/WayScience/jump_image_data_downloader"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"jump_image_datasets.jump_pilot" = ["data/*.parquet"]
+
+[dependency-groups]
+notebook = [
+  "jupyter>=1.1.1",
+]
+test = [
+  "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
