@@ -1,3 +1,9 @@
+"""Accessors for packaged JUMP pilot image metadata.
+
+The parquet file is distributed as package data. This module provides path
+resolution and a cached DataFrame loader for repeated metadata access.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,7 +21,18 @@ _METADATA_DF_CACHE: pd.DataFrame | None = None
 
 
 def get_metadata_path() -> Path:
-    """Return a local filesystem path to the packaged metadata parquet file."""
+    """Return a local filesystem path to the packaged metadata parquet file.
+
+    Returns
+    -------
+    Path
+        Local path to ``2020_11_04_CPJUMP1_all_plates.parquet``.
+
+    Notes
+    -----
+    When the package is installed in a non-filesystem context, the parquet file
+    is copied once to a temporary cache directory and that path is returned.
+    """
 
     global _CACHED_RESOURCE_PATH
 
@@ -49,7 +66,13 @@ def get_metadata_path() -> Path:
 
 
 def clear_metadata_cache() -> None:
-    """Clear the in-memory DataFrame cache used by :func:`load_metadata`."""
+    """Clear the in-memory DataFrame cache used by :func:`load_metadata`.
+
+    Returns
+    -------
+    None
+        This function mutates module state and does not return a value.
+    """
 
     global _METADATA_DF_CACHE
     _METADATA_DF_CACHE = None
@@ -70,6 +93,16 @@ def load_metadata(
     copy_dataframe
         If ``True``, return a copy of the DataFrame. This is useful when callers
         plan to mutate the returned DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame loaded from the packaged parquet file.
+
+    Notes
+    -----
+    If ``use_cache`` is ``True``, repeated calls return the same in-memory
+    DataFrame object unless ``copy_dataframe`` is also ``True``.
     """
 
     global _METADATA_DF_CACHE
