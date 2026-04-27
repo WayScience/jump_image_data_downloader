@@ -17,6 +17,14 @@ uv sync --group test
 uv pip install -e .
 ```
 
+### Install from the GitHub repo with pip
+
+```bash
+pip install "git+https://github.com/WayScience/jump_image_data_downloader.git"
+```
+
+This installs the package directly from the latest code, rather than from a PyPI release.
+
 ## Usage
 
 ```python
