@@ -37,6 +37,7 @@ notebook = [
 ]
 test = [
   "pytest>=9.0.2",
+  "twine>=6.1.0",
 ]
 
 [tool.pytest.ini_options]
