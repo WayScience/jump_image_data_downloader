@@ -33,46 +33,6 @@ pip install "git+https://github.com/WayScience/jump_image_data_downloader.git"
 
 Install from GitHub if you want the latest unreleased changes.
 
-## Release workflow
-
-This repo includes automated publishing workflows:
-
-- TestPyPI: `.github/workflows/publish-testpypi.yml`
-- PyPI: `.github/workflows/publish.yml`
-
-Both workflows use trusted publishing (GitHub OIDC), so no long-lived API token is required.
-
-### Maintainer checklist
-
-1. Bump `version` in `pyproject.toml`.
-2. Run tests:
-
-   ```bash
-   uv run --group test pytest
-   ```
-
-3. Build distributions:
-
-   ```bash
-   uv build
-   ```
-
-4. Validate package metadata/artifacts:
-
-   ```bash
-   uv run --group test twine check dist/*
-   ```
-
-5. Merge to `main`.
-6. Create a GitHub prerelease (for example `v0.1.1rc1`) to publish to TestPyPI.
-7. Verify install from TestPyPI in a fresh environment.
-8. Create a GitHub release (for example `v0.1.1`) to publish to PyPI.
-9. Verify install from PyPI:
-
-   ```bash
-   pip install jump-image-datasets
-   ```
-
 ## Usage
 
 ```python
