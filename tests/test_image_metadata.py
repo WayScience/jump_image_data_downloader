@@ -1,8 +1,16 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from jump_image_datasets.jump_pilot import image_metadata
+
+
+@pytest.fixture(autouse=True)
+def _clear_metadata_cache_between_tests() -> None:
+    image_metadata.clear_metadata_cache()
+    yield
+    image_metadata.clear_metadata_cache()
 
 
 def test_get_metadata_path_points_to_packaged_parquet() -> None:
