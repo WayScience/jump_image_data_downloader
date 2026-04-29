@@ -14,7 +14,11 @@ from importlib import resources
 import pandas as pd
 
 
+# This file was constructed from data in the
+# JUMP Cell Painting Galley
+# See (https://open.quiltdata.com/b/cellpainting-gallery/tree/)
 METADATA_FILENAME = "2020_11_04_CPJUMP1_all_plates.parquet"
+
 _METADATA_RESOURCE_RELATIVE_PATH = Path("data") / METADATA_FILENAME
 _CACHED_RESOURCE_PATH: Path | None = None
 _METADATA_DF_CACHE: pd.DataFrame | None = None
