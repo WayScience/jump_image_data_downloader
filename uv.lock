@@ -1076,7 +1076,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pandas", specifier = ">=1.5" },
+    { name = "pandas", specifier = ">=2.2,<4" },
     { name = "pyarrow", specifier = ">=23.0.1" },
     { name = "s3fs", specifier = ">=2023.1.0" },
 ]

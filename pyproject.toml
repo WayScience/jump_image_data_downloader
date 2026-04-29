@@ -12,7 +12,7 @@ license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{ name = "Cameron Mattson" }]
 dependencies = [
-  "pandas>=1.5",
+  "pandas>=2.2,<4",
   "pyarrow>=23.0.1",
   "s3fs>=2023.1.0",
 ]
