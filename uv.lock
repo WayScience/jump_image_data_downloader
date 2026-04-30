@@ -1057,7 +1057,6 @@ wheels = [
 
 [[package]]
 name = "jump-image-datasets"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },

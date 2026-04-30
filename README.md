@@ -4,6 +4,14 @@
 
 ## Install
 
+### Install from PyPI
+
+```bash
+pip install jump-image-datasets
+```
+
+Install from PyPI for stable, versioned releases.
+
 ### Local development with uv
 
 ```bash
@@ -23,7 +31,7 @@ uv pip install -e .
 pip install "git+https://github.com/WayScience/jump_image_data_downloader.git"
 ```
 
-This installs the package directly from the latest code, rather than from a PyPI release.
+Install from GitHub if you want the latest unreleased changes.
 
 ## Usage
 
