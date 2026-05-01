@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -16,10 +19,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v6
 
       - name: Setup Python
         run: uv python install ${{ matrix.python-version }}
