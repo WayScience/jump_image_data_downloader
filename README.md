@@ -1,5 +1,9 @@
 # jump-image-datasets
 
+[![Tests](https://github.com/WayScience/jump_image_data_downloader/actions/workflows/test.yml/badge.svg)](https://github.com/WayScience/jump_image_data_downloader/actions/workflows/test.yml)
+[![PyPI version](https://img.shields.io/pypi/v/jump-image-datasets.svg)](https://pypi.org/project/jump-image-datasets/)
+[![Publish to PyPI](https://github.com/WayScience/jump_image_data_downloader/actions/workflows/publish.yml/badge.svg)](https://github.com/WayScience/jump_image_data_downloader/actions/workflows/publish.yml)
+
 `jump-image-datasets` provides packaged JUMP pilot metadata and utilities for downloading image files from metadata tables.
 
 ## Install
