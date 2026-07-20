@@ -12,9 +12,11 @@ class FakeS3FileSystem:
     def __init__(self, files: dict[str, bytes], anon: bool = True):
         self.files = files
         self.anon = anon
+        self.opened_paths: list[str] = []
 
     def open(self, remote_path: str, mode: str):
         assert mode == "rb"
+        self.opened_paths.append(remote_path)
         if remote_path not in self.files:
             raise FileNotFoundError(remote_path)
         return io.BytesIO(self.files[remote_path])
@@ -195,3 +197,62 @@ def test_real_metadata_slice_download_plan_and_output_paths(tmp_path, monkeypatc
     assert summary.failed == 0
     for expected_name in expected_filenames:
         assert (tmp_path / expected_name).exists()
+
+
+def test_download_images_prefilters_existing_files(tmp_path, monkeypatch) -> None:
+    existing_file = tmp_path / "existing.tiff"
+    existing_file.write_bytes(b"existing")
+    df = pd.DataFrame({"Metadata_FileUrl": ["s3://bucket/path/existing.tiff"]})
+
+    fake_fs = FakeS3FileSystem(files={})
+    monkeypatch.setattr(
+        image_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    summary = image_downloader.download_images_with_metadata(
+        df=df,
+        url_column="Metadata_FileUrl",
+        default_output_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 0
+    assert summary.skipped == 1
+    assert summary.failed == 0
+    assert fake_fs.opened_paths == []
+    assert existing_file.read_bytes() == b"existing"
+
+
+def test_download_images_overwrite_redownloads_existing_files(tmp_path, monkeypatch) -> None:
+    existing_file = tmp_path / "existing.tiff"
+    existing_file.write_bytes(b"old")
+    df = pd.DataFrame({"Metadata_FileUrl": ["s3://bucket/path/existing.tiff"]})
+
+    fake_fs = FakeS3FileSystem(files={"bucket/path/existing.tiff": b"new"})
+    monkeypatch.setattr(
+        image_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    summary = image_downloader.download_images_with_metadata(
+        df=df,
+        url_column="Metadata_FileUrl",
+        default_output_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+        overwrite=True,
+    )
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 1
+    assert summary.skipped == 0
+    assert summary.failed == 0
+    assert fake_fs.opened_paths == ["bucket/path/existing.tiff"]
+    assert existing_file.read_bytes() == b"new"
