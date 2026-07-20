@@ -56,6 +56,25 @@ summary = image_downloader.download_images_with_metadata(
 print(summary)
 ```
 
+```python
+from jump_image_datasets.cpg0016 import CPG0016LoadDataWithIllumDownloader
+
+downloader = CPG0016LoadDataWithIllumDownloader(
+    csv_download_dir="downloaded_cpg0016_csvs",
+)
+
+metadata_df = downloader.get_dataframe()
+
+downloader.download_illumination_files(
+    download_dir="downloaded_cpg0016_illum",
+)
+
+downloader.download_files_from_column(
+    column_name="URL_OrigDNA",
+    download_dir="downloaded_cpg0016_orig_dna",
+)
+```
+
 For a full runnable example, see `docs/download_images_examples.ipynb`.
 
 ## Packaged metadata provenance
