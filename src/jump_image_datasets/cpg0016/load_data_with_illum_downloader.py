@@ -94,6 +94,12 @@ def remote_path_to_s3_url(remote_path: str) -> str:
     return f"s3://{bucket}/{key}"
 
 
+def is_source_all_path(path_str: str) -> bool:
+    """Return whether a remote or relative dataset path points at ``source_all``."""
+
+    return "/source_all/" in f"/{str(path_str).strip().strip('/')}/"
+
+
 def s3_url_to_relative_local_path(s3_url: str) -> Path:
     """Map an ``s3://`` URL to a stable relative local path.
 
@@ -279,7 +285,7 @@ class CPG0016LoadDataWithIllumDownloader:
         return [
             remote_path_to_s3_url(remote_path)
             for remote_path in remote_paths
-            if "/source_all/" not in f"/{remote_path}/"
+            if not is_source_all_path(remote_path)
         ]
 
     def _build_jobs(
@@ -311,7 +317,11 @@ class CPG0016LoadDataWithIllumDownloader:
     def _discover_local_csv_jobs(self) -> list[DownloadJob]:
         """Build download jobs from existing local CSVs without querying S3."""
 
-        local_csv_paths = sorted(self.csv_download_dir.glob("**/load_data_with_illum.csv"))
+        local_csv_paths = [
+            local_path
+            for local_path in sorted(self.csv_download_dir.glob("**/load_data_with_illum.csv"))
+            if not is_source_all_path(local_path.relative_to(self.csv_download_dir).as_posix())
+        ]
         if not local_csv_paths:
             raise ValueError(
                 "No local load_data_with_illum.csv files were found under "
@@ -335,6 +345,14 @@ class CPG0016LoadDataWithIllumDownloader:
 
     def get_dataframe(self) -> pd.DataFrame:
         """Load all downloaded metadata CSVs and concatenate them into one DataFrame."""
+
+        missing_jobs = [job for job in self.csv_jobs if not job.local_path.exists()]
+        if missing_jobs:
+            raise RuntimeError(
+                "Cannot build dataframe because one or more metadata CSV files are missing. "
+                "Inspect csv_download_summary.failures and retry the failed downloads. "
+                f"Missing files: {len(missing_jobs)}"
+            )
 
         dataframes: list[pd.DataFrame] = []
         for job in self.csv_jobs:
