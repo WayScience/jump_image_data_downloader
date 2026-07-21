@@ -1,10 +1,18 @@
 import io
+import shutil
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from jump_image_datasets.cpg0016 import load_data_with_illum_downloader
+
+
+TEST_DATA_DIR = Path(__file__).parent / "data" / "cpg0016"
+
+
+def _copy_test_csv_tree(destination: Path) -> None:
+    shutil.copytree(TEST_DATA_DIR / "cpg0016-jump", destination / "cpg0016-jump")
 
 
 class FakeS3FileSystem:
@@ -84,35 +92,11 @@ def test_constructor_discovers_downloads_and_excludes_source_all(tmp_path, monke
 
 
 def test_get_dataframe_concatenates_downloaded_csvs_with_provenance(tmp_path, monkeypatch) -> None:
-    glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
-        "cellpainting-gallery/cpg0016-jump/source_11/workspace/load_data_csv/run_b/plate_b/load_data_with_illum.csv",
-    ]
-    files = {
-        glob_paths[0]: _csv_bytes(
-            [
-                {
-                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
-                    "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif",
-                    "Metadata_Source": "source_10",
-                }
-            ]
-        ),
-        glob_paths[1]: _csv_bytes(
-            [
-                {
-                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_11/images/run_b/plate_b/agp.npy",
-                    "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_11/images/run_b/plate_b/dna.tif",
-                    "Metadata_Source": "source_11",
-                }
-            ]
-        ),
-    }
-
+    _copy_test_csv_tree(tmp_path)
     monkeypatch.setattr(
         load_data_with_illum_downloader.s3fs,
         "S3FileSystem",
-        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=glob_paths, anon=anon),
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
     )
 
     downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
@@ -120,41 +104,26 @@ def test_get_dataframe_concatenates_downloaded_csvs_with_provenance(tmp_path, mo
         parallel=False,
         workers=1,
         verbose=False,
+        use_existing_csvs_without_s3_check=True,
     )
     dataframe = downloader.get_dataframe()
 
-    assert len(dataframe) == 2
+    assert len(dataframe) == 3
     assert set(dataframe["Metadata_Source"]) == {"source_10", "source_11"}
     assert "Metadata_LoadDataCSVPath" in dataframe.columns
     assert "Metadata_LoadDataCSVURL" in dataframe.columns
 
 
 def test_download_files_from_column_creates_directory_and_deduplicates(tmp_path, monkeypatch) -> None:
-    glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
-    ]
+    _copy_test_csv_tree(tmp_path / "csvs")
     files = {
-        glob_paths[0]: _csv_bytes(
-            [
-                {
-                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
-                    "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif",
-                },
-                {
-                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
-                    "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna_2.tif",
-                },
-            ]
-        ),
         "cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy": b"npy-data",
-        "cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif": b"tif-data",
-        "cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna_2.tif": b"tif-data-2",
     }
 
     monkeypatch.setattr(
         load_data_with_illum_downloader.s3fs,
         "S3FileSystem",
-        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=glob_paths, anon=anon),
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=[], anon=anon),
     )
 
     downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
@@ -162,10 +131,11 @@ def test_download_files_from_column_creates_directory_and_deduplicates(tmp_path,
         parallel=False,
         workers=1,
         verbose=False,
+        use_existing_csvs_without_s3_check=True,
     )
 
-    dataframe = downloader.get_dataframe()
-    dataframe["OutputDir"] = [str(tmp_path / "plate_a"), str(tmp_path / "plate_a")]
+    dataframe = downloader.get_dataframe().query("Metadata_Source == 'source_10'")
+    dataframe["OutputDir"] = [str(tmp_path / "plate_a")] * len(dataframe)
 
     summary = downloader.download_files_from_column(
         dataframe=dataframe,
@@ -583,16 +553,8 @@ def test_constructor_overwrite_redownloads_existing_csv_files(tmp_path, monkeypa
 
 
 def test_constructor_can_use_existing_local_csvs_without_s3_check(tmp_path, monkeypatch) -> None:
+    _copy_test_csv_tree(tmp_path)
     local_path = tmp_path / "cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_bytes(
-        _csv_bytes(
-            [{
-                "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
-                "Metadata_Source": "source_10",
-            }]
-        )
-    )
 
     monkeypatch.setattr(
         load_data_with_illum_downloader.s3fs,
@@ -609,22 +571,60 @@ def test_constructor_can_use_existing_local_csvs_without_s3_check(tmp_path, monk
     )
 
     assert downloader.csv_urls == [
-        "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+        "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
+        "s3://cellpainting-gallery/cpg0016-jump/source_11/workspace/load_data_csv/run_b/plate_b/load_data_with_illum.csv",
     ]
     assert downloader.csv_jobs[0].local_path == local_path
-    assert downloader.csv_download_summary.total_jobs == 1
+    assert downloader.csv_download_summary.total_jobs == 2
     assert downloader.csv_download_summary.downloaded == 0
-    assert downloader.csv_download_summary.skipped == 1
+    assert downloader.csv_download_summary.skipped == 2
     assert downloader.csv_download_summary.failed == 0
 
     dataframe = downloader.get_dataframe()
-    assert len(dataframe) == 1
+    assert len(dataframe) == 3
     assert dataframe.loc[0, "Metadata_Source"] == "source_10"
     assert dataframe.loc[0, "Metadata_LoadDataCSVPath"] == str(local_path)
     assert (
         dataframe.loc[0, "Metadata_LoadDataCSVURL"]
         == "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
     )
+
+
+def test_get_dataframe_raises_clear_error_when_csv_download_is_incomplete(tmp_path, monkeypatch) -> None:
+    glob_paths = [
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
+        "cellpainting-gallery/cpg0016-jump/source_11/workspace/load_data_csv/run_b/plate_b/load_data_with_illum.csv",
+    ]
+    files = {
+        glob_paths[0]: _csv_bytes(
+            [
+                {
+                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
+                    "Metadata_Source": "source_10",
+                }
+            ]
+        ),
+    }
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=glob_paths, anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert downloader.csv_download_summary.failed == 1
+    with pytest.raises(
+        RuntimeError,
+        match=r"Cannot build dataframe because one or more metadata CSV files are missing\.",
+    ):
+        downloader.get_dataframe()
 
 
 def test_constructor_local_only_mode_requires_existing_local_csvs(tmp_path, monkeypatch) -> None:
