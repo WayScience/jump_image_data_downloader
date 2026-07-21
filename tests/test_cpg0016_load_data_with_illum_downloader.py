@@ -26,6 +26,17 @@ class FakeS3FileSystem:
         return io.BytesIO(self.files[remote_path])
 
 
+class FailIfUsedS3FileSystem:
+    def __init__(self, anon: bool = True):
+        self.anon = anon
+
+    def glob(self, pattern: str) -> list[str]:
+        raise AssertionError("S3 glob should not be called")
+
+    def open(self, remote_path: str, mode: str):
+        raise AssertionError("S3 open should not be called")
+
+
 def _csv_bytes(rows: list[dict[str, str]]) -> bytes:
     dataframe = pd.DataFrame(rows)
     return dataframe.to_csv(index=False).encode("utf-8")
@@ -153,9 +164,13 @@ def test_download_files_from_column_creates_directory_and_deduplicates(tmp_path,
         verbose=False,
     )
 
+    dataframe = downloader.get_dataframe()
+    dataframe["OutputDir"] = [str(tmp_path / "plate_a"), str(tmp_path / "plate_a")]
+
     summary = downloader.download_files_from_column(
+        dataframe=dataframe,
         column_name="URL_IllumAGP",
-        download_dir=tmp_path / "illum_files",
+        output_dir_column="OutputDir",
         parallel=False,
         workers=1,
         verbose=False,
@@ -163,10 +178,7 @@ def test_download_files_from_column_creates_directory_and_deduplicates(tmp_path,
 
     assert summary.total_jobs == 1
     assert summary.downloaded == 1
-    assert (
-        tmp_path
-        / "illum_files/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy"
-    ).exists()
+    assert (tmp_path / "plate_a/agp.npy").exists()
 
 
 def test_download_group_helpers_download_expected_file_types(tmp_path, monkeypatch) -> None:
@@ -215,15 +227,20 @@ def test_download_group_helpers_download_expected_file_types(tmp_path, monkeypat
         verbose=False,
     )
 
+    dataframe = downloader.get_dataframe()
+    dataframe["OutputDir"] = str(tmp_path / "plate_outputs")
+
     illum_summary = downloader.download_illumination_files(
-        download_dir=tmp_path / "illum",
+        dataframe=dataframe,
+        output_dir_column="OutputDir",
         columns=["URL_IllumAGP", "URL_IllumDNA"],
         parallel=False,
         workers=1,
         verbose=False,
     )
     image_summary = downloader.download_image_files(
-        download_dir=tmp_path / "images",
+        dataframe=dataframe,
+        output_dir_column="OutputDir",
         columns=["URL_OrigDNA", "URL_OrigAGP"],
         parallel=False,
         workers=1,
@@ -232,13 +249,13 @@ def test_download_group_helpers_download_expected_file_types(tmp_path, monkeypat
 
     assert illum_summary.downloaded == 2
     assert image_summary.downloaded == 2
-    assert (tmp_path / "illum/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy").exists()
-    assert (tmp_path / "illum/cpg0016-jump/source_10/images/run_a/plate_a/dna.npy").exists()
-    assert (tmp_path / "images/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif").exists()
-    assert (tmp_path / "images/cpg0016-jump/source_10/images/run_a/plate_a/agp.tif").exists()
+    assert (tmp_path / "plate_outputs/agp.npy").exists()
+    assert (tmp_path / "plate_outputs/dna.npy").exists()
+    assert (tmp_path / "plate_outputs/dna.tif").exists()
+    assert (tmp_path / "plate_outputs/agp.tif").exists()
 
 
-def test_missing_download_directory_or_column_raises(tmp_path, monkeypatch) -> None:
+def test_missing_required_columns_raise(tmp_path, monkeypatch) -> None:
     glob_paths = [
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
     ]
@@ -267,19 +284,240 @@ def test_missing_download_directory_or_column_raises(tmp_path, monkeypatch) -> N
         verbose=False,
     )
 
-    with pytest.raises(ValueError, match="download_dir must be provided"):
+    dataframe = downloader.get_dataframe()
+
+    with pytest.raises(ValueError, match="columns not found: MissingColumn"):
         downloader.download_files_from_column(
-            column_name="URL_IllumAGP",
-            download_dir=None,
+            dataframe=dataframe,
+            column_name="MissingColumn",
+            output_dir_column="OutputDir",
             parallel=False,
             workers=1,
             verbose=False,
         )
 
-    with pytest.raises(ValueError, match="column not found: MissingColumn"):
+    with pytest.raises(ValueError, match="Output directory column not found: OutputDir"):
         downloader.download_files_from_column(
-            column_name="MissingColumn",
-            download_dir=tmp_path / "files",
+            dataframe=dataframe,
+            column_name="URL_IllumAGP",
+            output_dir_column="OutputDir",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+    with pytest.raises(ValueError, match="columns not found: MissingA, MissingB"):
+        downloader.download_image_files(
+            dataframe=dataframe,
+            output_dir_column="OutputDir",
+            columns=["MissingA", "MissingB"],
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+
+def test_filtered_dataframe_is_respected(tmp_path, monkeypatch) -> None:
+    glob_paths = [
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
+        "cellpainting-gallery/cpg0016-jump/source_11/workspace/load_data_csv/run_b/plate_b/load_data_with_illum.csv",
+    ]
+    files = {
+        glob_paths[0]: _csv_bytes(
+            [{
+                "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna_a.tif",
+                "Metadata_Source": "source_10",
+            }]
+        ),
+        glob_paths[1]: _csv_bytes(
+            [{
+                "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_11/images/run_b/plate_b/dna_b.tif",
+                "Metadata_Source": "source_11",
+            }]
+        ),
+        "cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna_a.tif": b"A",
+        "cellpainting-gallery/cpg0016-jump/source_11/images/run_b/plate_b/dna_b.tif": b"B",
+    }
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=glob_paths, anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path / "csvs",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    dataframe = downloader.get_dataframe()
+    filtered_df = dataframe[dataframe["Metadata_Source"] == "source_10"].copy()
+    filtered_df["OutputDir"] = str(tmp_path / "filtered")
+
+    summary = downloader.download_files_from_column(
+        dataframe=filtered_df,
+        column_name="URL_OrigDNA",
+        output_dir_column="OutputDir",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 1
+    assert (tmp_path / "filtered/dna_a.tif").exists()
+    assert not (tmp_path / "filtered/dna_b.tif").exists()
+
+
+def test_output_dir_column_supports_absolute_and_relative_paths(tmp_path, monkeypatch) -> None:
+    remote_csv = "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    files = {
+        remote_csv: _csv_bytes(
+            [{
+                "URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif",
+            }]
+        ),
+        "cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif": b"dna",
+    }
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=[remote_csv], anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path / "csvs",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    relative_dir = tmp_path / "relative_dir"
+    absolute_dir = tmp_path / "absolute_dir"
+    dataframe = pd.DataFrame(
+        {
+            "URL_OrigDNA": [
+                "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif",
+                "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif",
+            ],
+            "OutputDir": [str(relative_dir), str(absolute_dir.resolve())],
+        }
+    )
+
+    summary = downloader.download_files_from_column(
+        dataframe=dataframe,
+        column_name="URL_OrigDNA",
+        output_dir_column="OutputDir",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert summary.downloaded == 2
+    assert (relative_dir / "dna.tif").exists()
+    assert (absolute_dir / "dna.tif").exists()
+
+
+def test_invalid_values_raise_with_row_index(tmp_path, monkeypatch) -> None:
+    remote_csv = "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    files = {
+        remote_csv: _csv_bytes([{"URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif"}]),
+    }
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=[remote_csv], anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path / "csvs",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    invalid_url_df = pd.DataFrame(
+        {
+            "URL_OrigDNA": ["not-an-s3-path"],
+            "OutputDir": [str(tmp_path / "files")],
+        }
+    )
+    with pytest.raises(ValueError, match=r"row index 0.*URL_OrigDNA"):
+        downloader.download_files_from_column(
+            dataframe=invalid_url_df,
+            column_name="URL_OrigDNA",
+            output_dir_column="OutputDir",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+    invalid_output_dir_df = pd.DataFrame(
+        {
+            "URL_OrigDNA": ["s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif"],
+            "OutputDir": ["   "],
+        }
+    )
+    with pytest.raises(ValueError, match=r"row index 0.*OutputDir"):
+        downloader.download_files_from_column(
+            dataframe=invalid_output_dir_df,
+            column_name="URL_OrigDNA",
+            output_dir_column="OutputDir",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+    missing_filename_df = pd.DataFrame(
+        {
+            "URL_OrigDNA": ["s3://cellpainting-gallery/"],
+            "OutputDir": [str(tmp_path / "files")],
+        }
+    )
+    with pytest.raises(ValueError, match=r"row index 0.*URL_OrigDNA"):
+        downloader.download_files_from_column(
+            dataframe=missing_filename_df,
+            column_name="URL_OrigDNA",
+            output_dir_column="OutputDir",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+
+def test_conflicting_local_paths_raise(tmp_path, monkeypatch) -> None:
+    remote_csv = "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    files = {remote_csv: _csv_bytes([{"URL_OrigDNA": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif"}])}
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=[remote_csv], anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path / "csvs",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    dataframe = pd.DataFrame(
+        {
+            "URL_OrigDNA": ["s3://bucket/a/shared.tif", "s3://bucket/b/shared.tif"],
+            "OutputDir": [str(tmp_path / "same_dir"), str(tmp_path / "same_dir")],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"Conflicting S3 URLs for local path"):
+        downloader.download_files_from_column(
+            dataframe=dataframe,
+            column_name="URL_OrigDNA",
+            output_dir_column="OutputDir",
             parallel=False,
             workers=1,
             verbose=False,
@@ -342,3 +580,71 @@ def test_constructor_overwrite_redownloads_existing_csv_files(tmp_path, monkeypa
     assert downloader.csv_download_summary.skipped == 0
     assert downloader.csv_download_summary.failed == 0
     assert fake_fs.opened_paths == [remote_path]
+
+
+def test_constructor_can_use_existing_local_csvs_without_s3_check(tmp_path, monkeypatch) -> None:
+    local_path = tmp_path / "cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(
+        _csv_bytes(
+            [{
+                "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
+                "Metadata_Source": "source_10",
+            }]
+        )
+    )
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+        use_existing_csvs_without_s3_check=True,
+    )
+
+    assert downloader.csv_urls == [
+        "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    ]
+    assert downloader.csv_jobs[0].local_path == local_path
+    assert downloader.csv_download_summary.total_jobs == 1
+    assert downloader.csv_download_summary.downloaded == 0
+    assert downloader.csv_download_summary.skipped == 1
+    assert downloader.csv_download_summary.failed == 0
+
+    dataframe = downloader.get_dataframe()
+    assert len(dataframe) == 1
+    assert dataframe.loc[0, "Metadata_Source"] == "source_10"
+    assert dataframe.loc[0, "Metadata_LoadDataCSVPath"] == str(local_path)
+    assert (
+        dataframe.loc[0, "Metadata_LoadDataCSVURL"]
+        == "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv"
+    )
+
+
+def test_constructor_local_only_mode_requires_existing_local_csvs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"No local load_data_with_illum.csv files were found under csv_download_dir; "
+            r"disable use_existing_csvs_without_s3_check to discover them from S3\."
+        ),
+    ):
+        load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+            csv_download_dir=tmp_path,
+            parallel=False,
+            workers=1,
+            verbose=False,
+            use_existing_csvs_without_s3_check=True,
+        )
