@@ -299,16 +299,26 @@ def download_images_with_metadata(
             failures=[],
         )
 
+    preexisting_jobs = 0
+    jobs_to_run = jobs
+    if not overwrite:
+        jobs_to_run = []
+        for job in jobs:
+            if job.local_path.exists():
+                preexisting_jobs += 1
+            else:
+                jobs_to_run.append(job)
+
     fs = s3fs.S3FileSystem(anon=True)
 
     downloaded = 0
-    skipped = 0
+    skipped = preexisting_jobs
     failed = 0
     failures: list[tuple[DownloadJob, str]] = []
 
     if parallel:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(download_one, fs, job, overwrite) for job in jobs]
+            futures = [executor.submit(download_one, fs, job, overwrite) for job in jobs_to_run]
             for index, future in enumerate(as_completed(futures), start=1):
                 status, job, error = future.result()
                 if status == "downloaded":
@@ -321,13 +331,13 @@ def download_images_with_metadata(
                     if verbose:
                         print(f"[FAILED] {job.s3_url} -> {job.local_path}\n  {error}")
 
-                if verbose and (index % 200 == 0 or index == len(jobs)):
+                if verbose and (index % 200 == 0 or index == len(jobs_to_run)):
                     print(
-                        f"Progress {index:,}/{len(jobs):,} "
+                        f"Progress {index + preexisting_jobs:,}/{len(jobs):,} "
                         f"(downloaded={downloaded:,}, skipped={skipped:,}, failed={failed:,})"
                     )
     else:
-        for index, job in enumerate(jobs, start=1):
+        for index, job in enumerate(jobs_to_run, start=1):
             status, job, error = download_one(fs, job, overwrite)
             if status == "downloaded":
                 downloaded += 1
@@ -339,11 +349,17 @@ def download_images_with_metadata(
                 if verbose:
                     print(f"[FAILED] {job.s3_url} -> {job.local_path}\n  {error}")
 
-            if verbose and (index % 200 == 0 or index == len(jobs)):
+            if verbose and (index % 200 == 0 or index == len(jobs_to_run)):
                 print(
-                    f"Progress {index:,}/{len(jobs):,} "
+                    f"Progress {index + preexisting_jobs:,}/{len(jobs):,} "
                     f"(downloaded={downloaded:,}, skipped={skipped:,}, failed={failed:,})"
                 )
+
+    if verbose and preexisting_jobs and not jobs_to_run:
+        print(
+            f"Progress {len(jobs):,}/{len(jobs):,} "
+            f"(downloaded={downloaded:,}, skipped={skipped:,}, failed={failed:,})"
+        )
 
     if verbose:
         print("Done.")

@@ -1,0 +1,3 @@
+URL_IllumAGP,URL_OrigDNA,Metadata_Source
+s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy,s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna.tif,source_10
+s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy,s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/dna_2.tif,source_10

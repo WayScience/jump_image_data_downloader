@@ -1,6 +1,12 @@
 """Utilities for accessing and downloading JUMP image datasets."""
 
+from . import cpg0016
 from . import jump_pilot
+from .cpg0016.load_data_with_illum_downloader import (
+    CPG0016LoadDataWithIllumDownloader,
+    IMAGE_COLUMNS,
+    ILLUMINATION_COLUMNS,
+)
 from .jump_pilot.image_downloader import (
     DownloadJob,
     DownloadSummary,
@@ -15,9 +21,13 @@ from .jump_pilot.image_metadata import (
 )
 
 __all__ = [
+    "cpg0016",
     "jump_pilot",
+    "CPG0016LoadDataWithIllumDownloader",
     "DownloadJob",
     "DownloadSummary",
+    "ILLUMINATION_COLUMNS",
+    "IMAGE_COLUMNS",
     "build_jobs",
     "download_images_with_metadata",
     "METADATA_FILENAME",
