@@ -2,7 +2,7 @@
 
 from .load_data_with_illum_downloader import (
     CPG0016LoadDataWithIllumDownloader,
-    CSV_GLOB_PATTERN,
+    LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN,
     CPG0016_BUCKET,
     CPG0016_PREFIX,
     DownloadJob,
@@ -13,7 +13,7 @@ from .load_data_with_illum_downloader import (
 
 __all__ = [
     "CPG0016LoadDataWithIllumDownloader",
-    "CSV_GLOB_PATTERN",
+    "LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN",
     "CPG0016_BUCKET",
     "CPG0016_PREFIX",
     "DownloadJob",

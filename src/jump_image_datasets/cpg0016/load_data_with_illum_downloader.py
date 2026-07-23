@@ -21,7 +21,7 @@ import s3fs
 
 CPG0016_BUCKET = "cellpainting-gallery"
 CPG0016_PREFIX = "cpg0016-jump"
-CSV_GLOB_PATTERN = (
+LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN = (
     f"{CPG0016_BUCKET}/{CPG0016_PREFIX}/source_*/workspace/load_data_csv/*/*/"
     "load_data_with_illum.csv"
 )
@@ -281,7 +281,7 @@ class CPG0016LoadDataWithIllumDownloader:
         """List all public CPG0016 metadata CSVs while excluding ``source_all``."""
 
         fs = s3fs.S3FileSystem(anon=True)
-        remote_paths = sorted(fs.glob(CSV_GLOB_PATTERN))
+        remote_paths = sorted(fs.glob(LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN))
         return [
             remote_path_to_s3_url(remote_path)
             for remote_path in remote_paths

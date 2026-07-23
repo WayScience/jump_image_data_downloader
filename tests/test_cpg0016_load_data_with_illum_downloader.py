@@ -23,7 +23,10 @@ class FakeS3FileSystem:
         self.opened_paths: list[str] = []
 
     def glob(self, pattern: str) -> list[str]:
-        assert pattern == load_data_with_illum_downloader.CSV_GLOB_PATTERN
+        assert (
+            pattern
+            == load_data_with_illum_downloader.LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN
+        )
         return list(self.glob_paths)
 
     def open(self, remote_path: str, mode: str):
