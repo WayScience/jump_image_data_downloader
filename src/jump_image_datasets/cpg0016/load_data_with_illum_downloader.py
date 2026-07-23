@@ -49,7 +49,15 @@ IMAGE_COLUMNS = [
 
 @dataclass(frozen=True)
 class DownloadJob:
-    """Single download task from one S3 URL to one local file path."""
+    """Single download task mapping one S3 URL to one local file path.
+
+    Attributes
+    ----------
+    s3_url
+        Source file URL in ``s3://bucket/key`` form.
+    local_path
+        Destination path where the file should be written.
+    """
 
     s3_url: str
     local_path: Path
@@ -57,7 +65,22 @@ class DownloadJob:
 
 @dataclass(frozen=True)
 class DownloadSummary:
-    """Aggregate counts and error details from a download run."""
+    """Aggregate counts and error details from a download run.
+
+    Attributes
+    ----------
+    total_jobs
+        Number of unique download jobs considered.
+    downloaded
+        Number of files downloaded in this run.
+    skipped
+        Number of files skipped because they already existed and ``overwrite``
+        was ``False``.
+    failed
+        Number of failed download attempts.
+    failures
+        List of ``(DownloadJob, error_message)`` tuples for failed downloads.
+    """
 
     total_jobs: int
     downloaded: int
@@ -67,14 +90,45 @@ class DownloadSummary:
 
 
 def validate_column(dataframe: pd.DataFrame, column_name: str, kind: str) -> None:
-    """Ensure a required dataframe column exists."""
+    """Ensure a required dataframe column exists.
+
+    Parameters
+    ----------
+    dataframe
+        Input metadata dataframe.
+    column_name
+        Column required for the current operation.
+    kind
+        Human-readable label used in the error message.
+
+    Raises
+    ------
+    ValueError
+        If ``column_name`` is not present in ``dataframe``.
+    """
 
     if column_name not in dataframe.columns:
         raise ValueError(f"{kind} column not found: {column_name}")
 
 
 def s3_url_to_remote_path(s3_url: str) -> str:
-    """Convert an ``s3://`` URL into the ``bucket/key`` format used by ``s3fs``."""
+    """Convert an ``s3://`` URL into the ``bucket/key`` format used by ``s3fs``.
+
+    Parameters
+    ----------
+    s3_url
+        Fully qualified S3 URL, for example ``s3://bucket/path/file.csv``.
+
+    Returns
+    -------
+    str
+        The ``bucket/key`` path expected by ``s3fs`` APIs.
+
+    Raises
+    ------
+    ValueError
+        If ``s3_url`` is not a valid S3 URL.
+    """
 
     parsed = urlparse(s3_url)
     if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
@@ -83,7 +137,23 @@ def s3_url_to_remote_path(s3_url: str) -> str:
 
 
 def remote_path_to_s3_url(remote_path: str) -> str:
-    """Convert a ``bucket/key`` path into an ``s3://`` URL."""
+    """Convert a ``bucket/key`` path into an ``s3://`` URL.
+
+    Parameters
+    ----------
+    remote_path
+        S3 path in ``bucket/key`` form.
+
+    Returns
+    -------
+    str
+        Equivalent URL in ``s3://bucket/key`` form.
+
+    Raises
+    ------
+    ValueError
+        If ``remote_path`` does not include both a bucket and key.
+    """
 
     cleaned_remote_path = str(remote_path).strip().lstrip("/")
     if "/" not in cleaned_remote_path:
@@ -95,7 +165,18 @@ def remote_path_to_s3_url(remote_path: str) -> str:
 
 
 def is_source_all_path(path_str: str) -> bool:
-    """Return whether a remote or relative dataset path points at ``source_all``."""
+    """Return whether a remote or relative dataset path points at ``source_all``.
+
+    Parameters
+    ----------
+    path_str
+        Remote path, URL path fragment, or relative dataset path to inspect.
+
+    Returns
+    -------
+    bool
+        ``True`` when the normalized path includes a ``source_all`` segment.
+    """
 
     return "/source_all/" in f"/{str(path_str).strip().strip('/')}/"
 
@@ -103,6 +184,18 @@ def is_source_all_path(path_str: str) -> bool:
 def s3_url_to_relative_local_path(s3_url: str) -> Path:
     """Map an ``s3://`` URL to a stable relative local path.
 
+    Parameters
+    ----------
+    s3_url
+        Source file URL in ``s3://bucket/key`` form.
+
+    Returns
+    -------
+    pathlib.Path
+        Dataset-relative path derived from the S3 key.
+
+    Notes
+    -----
     The bucket name is excluded so downloaded files land under a concise,
     dataset-relative tree rooted at the caller-provided output directory.
     """
@@ -113,7 +206,23 @@ def s3_url_to_relative_local_path(s3_url: str) -> Path:
 
 
 def s3_url_to_filename(s3_url: str) -> str:
-    """Extract the filename from an ``s3://`` URL."""
+    """Extract the filename from an ``s3://`` URL.
+
+    Parameters
+    ----------
+    s3_url
+        Source file URL in ``s3://bucket/key`` form.
+
+    Returns
+    -------
+    str
+        Final path component from the URL.
+
+    Raises
+    ------
+    ValueError
+        If ``s3_url`` is invalid or does not include a filename.
+    """
 
     parsed = urlparse(s3_url)
     if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
@@ -130,7 +239,24 @@ def download_one(
     job: DownloadJob,
     overwrite: bool = False,
 ) -> tuple[str, DownloadJob, Optional[str]]:
-    """Download one file and return status, job, and optional error message."""
+    """Download one file and return status, job, and optional error message.
+
+    Parameters
+    ----------
+    fs
+        S3 filesystem client used for reading remote objects.
+    job
+        Download job containing source URL and destination file path.
+    overwrite
+        If ``True``, replace an existing local file. If ``False``, an existing
+        local file is left in place and the job is reported as skipped.
+
+    Returns
+    -------
+    tuple[str, DownloadJob, str | None]
+        A tuple of ``(status, job, error_message)`` where status is one of
+        ``"downloaded"``, ``"skipped"``, or ``"failed"``.
+    """
 
     try:
         job.local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +280,34 @@ def run_download_jobs(
     parallel: bool = True,
     verbose: bool = True,
 ) -> DownloadSummary:
-    """Execute download jobs and return a summary."""
+    """Execute download jobs and return a summary.
+
+    Parameters
+    ----------
+    jobs
+        Planned download jobs to execute.
+    overwrite
+        If ``True``, jobs with existing local files are downloaded again and
+        replace those files. If ``False``, existing local files are counted as
+        skipped and are not re-downloaded.
+    workers
+        Number of worker threads to use when ``parallel`` is ``True``.
+    parallel
+        If ``True``, execute jobs with a thread pool. If ``False``, execute
+        jobs serially.
+    verbose
+        If ``True``, print failures and progress updates.
+
+    Returns
+    -------
+    DownloadSummary
+        Aggregate counts and failure details for the run.
+
+    Raises
+    ------
+    ValueError
+        If ``workers < 1`` or if ``parallel`` is ``False`` and ``workers > 1``.
+    """
 
     if workers < 1:
         raise ValueError("workers must be >= 1")
@@ -235,7 +388,26 @@ def run_download_jobs(
 
 
 class CPG0016LoadDataWithIllumDownloader:
-    """Discover, download, and read CPG0016 metadata CSVs and referenced files."""
+    """Discover, download, and read CPG0016 metadata CSVs and referenced files.
+
+    Parameters
+    ----------
+    csv_download_dir
+        Local directory where metadata CSVs are stored.
+    overwrite
+        If ``True``, re-download metadata CSVs even when matching local files
+        already exist.
+    workers
+        Number of worker threads to use when downloading metadata CSVs.
+    parallel
+        If ``True``, download metadata CSVs concurrently. If ``False``,
+        download them serially.
+    verbose
+        If ``True``, print failures and progress updates while downloading.
+    use_existing_csvs_without_s3_check
+        If ``True``, skip S3 discovery and build metadata jobs from existing
+        local ``load_data_with_illum.csv`` files under ``csv_download_dir``.
+    """
 
     def __init__(
         self,
@@ -247,6 +419,33 @@ class CPG0016LoadDataWithIllumDownloader:
         verbose: bool = True,
         use_existing_csvs_without_s3_check: bool = False,
     ) -> None:
+        """Initialize the downloader and optionally fetch metadata CSVs.
+
+        Parameters
+        ----------
+        csv_download_dir
+            Local directory where metadata CSVs are stored.
+        overwrite
+            If ``True``, re-download metadata CSVs even when matching local
+            files already exist.
+        workers
+            Number of worker threads to use when downloading metadata CSVs.
+        parallel
+            If ``True``, download metadata CSVs concurrently. If ``False``,
+            download them serially.
+        verbose
+            If ``True``, print failures and progress updates while downloading.
+        use_existing_csvs_without_s3_check
+            If ``True``, skip S3 discovery and build metadata jobs from
+            existing local ``load_data_with_illum.csv`` files under
+            ``csv_download_dir``.
+
+        Raises
+        ------
+        ValueError
+            If ``csv_download_dir`` is ``None``.
+        """
+
         if csv_download_dir is None:
             raise ValueError("csv_download_dir must be provided")
 
@@ -280,7 +479,13 @@ class CPG0016LoadDataWithIllumDownloader:
             )
 
     def discover_csv_urls(self) -> list[str]:
-        """List all public CPG0016 metadata CSVs while excluding ``source_all``."""
+        """List all public CPG0016 metadata CSVs while excluding ``source_all``.
+
+        Returns
+        -------
+        list[str]
+            Metadata CSV URLs discovered from the public CPG0016 bucket.
+        """
 
         fs = s3fs.S3FileSystem(anon=True)
         remote_paths = sorted(fs.glob(LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN))
@@ -295,7 +500,20 @@ class CPG0016LoadDataWithIllumDownloader:
         s3_urls: list[str],
         base_dir: Path | str,
     ) -> list[DownloadJob]:
-        """Build unique download jobs preserving source-relative directory structure."""
+        """Build unique download jobs preserving source-relative directory structure.
+
+        Parameters
+        ----------
+        s3_urls
+            Candidate S3 URLs to convert into download jobs.
+        base_dir
+            Local root directory under which dataset-relative paths are built.
+
+        Returns
+        -------
+        list[DownloadJob]
+            Unique download jobs in first-seen URL order.
+        """
 
         base_dir_path = Path(base_dir)
         jobs: list[DownloadJob] = []
@@ -317,7 +535,19 @@ class CPG0016LoadDataWithIllumDownloader:
         return jobs
 
     def _discover_local_csv_jobs(self) -> list[DownloadJob]:
-        """Build download jobs from existing local CSVs without querying S3."""
+        """Build download jobs from existing local CSVs without querying S3.
+
+        Returns
+        -------
+        list[DownloadJob]
+            Download jobs whose local paths point at existing CSV files under
+            ``csv_download_dir``.
+
+        Raises
+        ------
+        ValueError
+            If no matching local CSV files are found.
+        """
 
         local_csv_paths = [
             local_path
@@ -340,13 +570,36 @@ class CPG0016LoadDataWithIllumDownloader:
         ]
 
     def _local_csv_path_to_s3_url(self, local_path: Path) -> str:
-        """Convert a local CSV path under ``csv_download_dir`` back into its S3 URL."""
+        """Convert a local CSV path under ``csv_download_dir`` back into its S3 URL.
+
+        Parameters
+        ----------
+        local_path
+            Local metadata CSV path rooted under ``csv_download_dir``.
+
+        Returns
+        -------
+        str
+            Synthetic ``s3://`` URL corresponding to ``local_path``.
+        """
 
         relative_path = local_path.relative_to(self.csv_download_dir).as_posix().lstrip("/")
         return f"s3://{CPG0016_BUCKET}/{relative_path}"
 
     def get_dataframe(self) -> pd.DataFrame:
-        """Load all downloaded metadata CSVs and concatenate them into one DataFrame."""
+        """Load all downloaded metadata CSVs and concatenate them into one DataFrame.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Concatenated metadata dataframe with source-path provenance columns
+            added for each CSV.
+
+        Raises
+        ------
+        RuntimeError
+            If one or more planned metadata CSV files are missing locally.
+        """
 
         missing_jobs = [job for job in self.csv_jobs if not job.local_path.exists()]
         if missing_jobs:
@@ -381,6 +634,30 @@ class CPG0016LoadDataWithIllumDownloader:
     ) -> DownloadSummary:
         """Download unique S3 files from one metadata column.
 
+        Parameters
+        ----------
+        dataframe
+            Metadata rows whose ``column_name`` values should be downloaded.
+        column_name
+            Column containing S3 URLs to download.
+        output_dir_column
+            Column containing per-row output directories.
+        overwrite
+            If ``True``, replace existing local files. If ``False``, existing
+            files are counted as skipped.
+        workers
+            Number of worker threads to use when ``parallel`` is ``True``.
+        parallel
+            If ``True``, execute downloads with a thread pool. If ``False``,
+            execute them serially.
+        verbose
+            If ``True``, print failures and progress updates.
+
+        Returns
+        -------
+        DownloadSummary
+            Aggregate counts and failure details for the run.
+
         The caller must provide both the metadata rows to use and a column of
         per-row output directories. Files are saved as
         ``Path(output_dir_column_value) / filename``.
@@ -410,7 +687,33 @@ class CPG0016LoadDataWithIllumDownloader:
         parallel: bool = True,
         verbose: bool = True,
     ) -> DownloadSummary:
-        """Download unique illumination ``.npy`` files from explicit metadata rows."""
+        """Download unique illumination ``.npy`` files from explicit metadata rows.
+
+        Parameters
+        ----------
+        dataframe
+            Metadata rows whose illumination-file URLs should be downloaded.
+        output_dir_column
+            Column containing per-row output directories.
+        columns
+            Optional subset of illumination URL columns to use. Defaults to
+            ``ILLUMINATION_COLUMNS``.
+        overwrite
+            If ``True``, replace existing local files. If ``False``, existing
+            files are counted as skipped.
+        workers
+            Number of worker threads to use when ``parallel`` is ``True``.
+        parallel
+            If ``True``, execute downloads with a thread pool. If ``False``,
+            execute them serially.
+        verbose
+            If ``True``, print failures and progress updates.
+
+        Returns
+        -------
+        DownloadSummary
+            Aggregate counts and failure details for the run.
+        """
 
         return self._download_files_from_columns(
             dataframe=dataframe,
@@ -433,7 +736,33 @@ class CPG0016LoadDataWithIllumDownloader:
         parallel: bool = True,
         verbose: bool = True,
     ) -> DownloadSummary:
-        """Download unique original image ``.tif`` files from explicit metadata rows."""
+        """Download unique original image ``.tif`` files from explicit metadata rows.
+
+        Parameters
+        ----------
+        dataframe
+            Metadata rows whose original-image URLs should be downloaded.
+        output_dir_column
+            Column containing per-row output directories.
+        columns
+            Optional subset of image URL columns to use. Defaults to
+            ``IMAGE_COLUMNS``.
+        overwrite
+            If ``True``, replace existing local files. If ``False``, existing
+            files are counted as skipped.
+        workers
+            Number of worker threads to use when ``parallel`` is ``True``.
+        parallel
+            If ``True``, execute downloads with a thread pool. If ``False``,
+            execute them serially.
+        verbose
+            If ``True``, print failures and progress updates.
+
+        Returns
+        -------
+        DownloadSummary
+            Aggregate counts and failure details for the run.
+        """
 
         return self._download_files_from_columns(
             dataframe=dataframe,
@@ -456,7 +785,32 @@ class CPG0016LoadDataWithIllumDownloader:
         parallel: bool,
         verbose: bool,
     ) -> DownloadSummary:
-        """Download unique S3 files referenced across multiple DataFrame columns."""
+        """Download unique S3 files referenced across multiple DataFrame columns.
+
+        Parameters
+        ----------
+        dataframe
+            Metadata rows whose URL columns should be downloaded.
+        columns
+            URL columns to scan for S3 file references.
+        output_dir_column
+            Column containing per-row output directories.
+        overwrite
+            If ``True``, replace existing local files. If ``False``, existing
+            files are counted as skipped.
+        workers
+            Number of worker threads to use when ``parallel`` is ``True``.
+        parallel
+            If ``True``, execute downloads with a thread pool. If ``False``,
+            execute them serially.
+        verbose
+            If ``True``, print failures and progress updates.
+
+        Returns
+        -------
+        DownloadSummary
+            Aggregate counts and failure details for the run.
+        """
 
         jobs = self._build_jobs_from_dataframe(
             dataframe=dataframe,
@@ -479,6 +833,27 @@ class CPG0016LoadDataWithIllumDownloader:
         output_dir_column: str,
     ) -> list[DownloadJob]:
         """Build validated download jobs from explicit metadata rows.
+
+        Parameters
+        ----------
+        dataframe
+            Metadata rows containing the URL and output-directory columns.
+        columns
+            URL columns to scan for S3 file references.
+        output_dir_column
+            Column containing per-row output directories.
+
+        Returns
+        -------
+        list[DownloadJob]
+            Validated download jobs deduplicated by destination path and URL.
+
+        Raises
+        ------
+        ValueError
+            If required columns are missing, output directories are invalid,
+            S3 URLs are invalid, or two distinct URLs would map to the same
+            local path.
 
         Validation is fail-fast and reports the row index and column for invalid
         output directories, invalid S3 URLs, and local-path collisions.
