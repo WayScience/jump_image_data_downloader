@@ -164,6 +164,8 @@ def run_download_jobs(
     preexisting_jobs = 0
     jobs_to_run = jobs
     if not overwrite:
+        # Count already-downloaded files up front so progress reflects skipped
+        # work without spending executor slots on jobs that would no-op.
         jobs_to_run = []
         for job in jobs:
             if job.local_path.exists():
@@ -491,6 +493,9 @@ class CPG0016LoadDataWithIllumDownloader:
         jobs: list[DownloadJob] = []
         planned_paths: dict[Path, tuple[str, object, str]] = {}
 
+        # Walk each requested row/column pair once, skipping missing URLs,
+        # deduplicating repeated references, and failing fast if two distinct
+        # S3 URLs would write to the same local file.
         for row_index, row in dataframe.iterrows():
             raw_output_dir = row[output_dir_column]
             if pd.isna(raw_output_dir) or str(raw_output_dir).strip() == "":
