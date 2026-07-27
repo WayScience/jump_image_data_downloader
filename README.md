@@ -82,7 +82,7 @@ downloader.download_files_from_column(
 )
 ```
 
-For a full runnable example, see `docs/download_images_examples.ipynb` and `docs/download_cpg0016_examples.ipynb`.
+For full runnable examples, see `docs/download_images_examples.ipynb`, `docs/download_cpg0016_examples.ipynb`, and `docs/download_cpg0016_profiles_examples.ipynb`.
 
 ## Packaged metadata provenance
 
