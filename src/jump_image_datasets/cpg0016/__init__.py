@@ -10,6 +10,12 @@ from .load_data_with_illum_downloader import (
     ILLUMINATION_COLUMNS,
     IMAGE_COLUMNS,
 )
+from .analysis_csv_downloader import (
+    ANALYSIS_CSV_COLUMNS,
+    ANALYSIS_CSV_GLOB_PATTERN,
+    ANALYSIS_MANIFEST_COLUMNS,
+    CPG0016AnalysisCSVDownloader,
+)
 
 __all__ = [
     "CPG0016LoadDataWithIllumDownloader",
@@ -20,4 +26,8 @@ __all__ = [
     "DownloadSummary",
     "ILLUMINATION_COLUMNS",
     "IMAGE_COLUMNS",
+    "CPG0016AnalysisCSVDownloader",
+    "ANALYSIS_CSV_COLUMNS",
+    "ANALYSIS_CSV_GLOB_PATTERN",
+    "ANALYSIS_MANIFEST_COLUMNS",
 ]

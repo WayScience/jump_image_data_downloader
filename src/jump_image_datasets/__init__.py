@@ -7,6 +7,7 @@ from .cpg0016.load_data_with_illum_downloader import (
     IMAGE_COLUMNS,
     ILLUMINATION_COLUMNS,
 )
+from .cpg0016.analysis_csv_downloader import CPG0016AnalysisCSVDownloader
 from .jump_pilot.image_downloader import (
     DownloadJob,
     DownloadSummary,
@@ -24,6 +25,7 @@ __all__ = [
     "cpg0016",
     "jump_pilot",
     "CPG0016LoadDataWithIllumDownloader",
+    "CPG0016AnalysisCSVDownloader",
     "DownloadJob",
     "DownloadSummary",
     "ILLUMINATION_COLUMNS",
