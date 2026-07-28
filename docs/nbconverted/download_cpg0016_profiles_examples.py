@@ -32,12 +32,11 @@ cached_profiles_df = cached_downloader.get_dataframe().iloc[:10].copy()
 
 
 # Download one profile CSV type while preserving the S3-relative directory tree
-# under the per-row output root to avoid filename collisions.
-cached_profiles_df["OutputRoot"] = "downloaded_profiles_csvs"
+# under the output root to avoid filename collisions.
 nuclei_summary = cached_downloader.download_csvs_from_column(
     dataframe=cached_profiles_df,
     column_name="Nuclei_S3_Path",
-    output_root_column="OutputRoot",
+    output_root="downloaded_profiles_csvs",
     parallel=True,
     workers=8,
 )
@@ -47,7 +46,7 @@ print(nuclei_summary)
 # Download all three profile CSV types from the same filtered dataframe.
 all_profiles_summary = cached_downloader.download_csvs_from_columns(
     dataframe=cached_profiles_df,
-    output_root_column="OutputRoot",
+    output_root="downloaded_profiles_csvs",
     parallel=True,
     workers=8,
 )

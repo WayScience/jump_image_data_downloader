@@ -296,7 +296,8 @@ class CPG0016AnalysisCSVDownloader:
         dataframe: pd.DataFrame,
         column_name: str,
         *,
-        output_root_column: str,
+        output_root: Optional[str | Path] = None,
+        output_root_column: Optional[str] = None,
         overwrite: bool = False,
         workers: int = 4,
         parallel: bool = True,
@@ -310,6 +311,8 @@ class CPG0016AnalysisCSVDownloader:
             Manifest rows whose analysis CSVs should be downloaded.
         column_name
             Manifest S3-path column to download.
+        output_root
+            Output root directory to use for every row.
         output_root_column
             Column containing the per-row output root directory.
         overwrite
@@ -331,6 +334,7 @@ class CPG0016AnalysisCSVDownloader:
         return self.download_csvs_from_columns(
             dataframe=dataframe,
             columns=[column_name],
+            output_root=output_root,
             output_root_column=output_root_column,
             overwrite=overwrite,
             workers=workers,
@@ -343,7 +347,8 @@ class CPG0016AnalysisCSVDownloader:
         dataframe: pd.DataFrame,
         *,
         columns: Optional[list[str]] = None,
-        output_root_column: str,
+        output_root: Optional[str | Path] = None,
+        output_root_column: Optional[str] = None,
         overwrite: bool = False,
         workers: int = 4,
         parallel: bool = True,
@@ -358,6 +363,8 @@ class CPG0016AnalysisCSVDownloader:
         columns
             Optional subset of analysis path columns. Defaults to all three
             analysis CSV columns.
+        output_root
+            Output root directory to use for every row.
         output_root_column
             Column containing the per-row output root directory.
         overwrite
@@ -379,6 +386,7 @@ class CPG0016AnalysisCSVDownloader:
         jobs = self._build_jobs_from_dataframe(
             dataframe=dataframe,
             columns=columns or ANALYSIS_CSV_COLUMNS,
+            output_root=output_root,
             output_root_column=output_root_column,
         )
         return run_download_jobs(
@@ -394,7 +402,8 @@ class CPG0016AnalysisCSVDownloader:
         *,
         dataframe: pd.DataFrame,
         columns: list[str],
-        output_root_column: str,
+        output_root: Optional[str | Path],
+        output_root_column: Optional[str],
     ) -> list[DownloadJob]:
         """Build download jobs from a manifest dataframe.
 
@@ -406,19 +415,34 @@ class CPG0016AnalysisCSVDownloader:
         missing_columns = [column for column in columns if column not in dataframe.columns]
         if missing_columns:
             raise ValueError(f"columns not found: {', '.join(missing_columns)}")
-        validate_column(dataframe, output_root_column, "Output root")
+        if output_root is not None and output_root_column is not None:
+            raise ValueError("Provide either output_root or output_root_column, not both")
+        if output_root is None and output_root_column is None:
+            raise ValueError("Provide output_root or output_root_column")
+        if output_root_column is not None:
+            validate_column(dataframe, output_root_column, "Output root")
+
+        constant_output_root: Optional[Path] = None
+        if output_root is not None:
+            raw_output_root = str(output_root).strip()
+            if not raw_output_root:
+                raise ValueError(f"Invalid output root value: {output_root!r}")
+            constant_output_root = Path(raw_output_root)
 
         jobs: list[DownloadJob] = []
         planned_paths: dict[Path, tuple[str, object, str]] = {}
 
         for row_index, row in dataframe.iterrows():
-            raw_output_root = row[output_root_column]
-            if pd.isna(raw_output_root) or str(raw_output_root).strip() == "":
-                raise ValueError(
-                    f"Invalid output root value at row index {row_index} "
-                    f"for column {output_root_column}: {raw_output_root!r}"
-                )
-            output_root = Path(str(raw_output_root).strip())
+            if constant_output_root is not None:
+                resolved_output_root = constant_output_root
+            else:
+                raw_output_root = row[output_root_column]
+                if pd.isna(raw_output_root) or str(raw_output_root).strip() == "":
+                    raise ValueError(
+                        f"Invalid output root value at row index {row_index} "
+                        f"for column {output_root_column}: {raw_output_root!r}"
+                    )
+                resolved_output_root = Path(str(raw_output_root).strip())
 
             for column in columns:
                 raw_s3_url = row[column]
@@ -440,7 +464,7 @@ class CPG0016AnalysisCSVDownloader:
                         f"Invalid S3 URL at row index {row_index} for column {column}: {raw_s3_url!r}"
                     ) from exc
 
-                local_path = output_root / relative_path
+                local_path = resolved_output_root / relative_path
                 existing = planned_paths.get(local_path)
                 if existing is None:
                     planned_paths[local_path] = (s3_url, row_index, column)

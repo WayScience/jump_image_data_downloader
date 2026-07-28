@@ -308,6 +308,123 @@ def test_invalid_dataframe_values_raise_clear_errors(tmp_path, monkeypatch) -> N
         )
 
 
+def test_download_csvs_accepts_constant_output_root(tmp_path, monkeypatch) -> None:
+    remote_nuclei = "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
+    fake_fs = FakeS3FileSystem(
+        files={remote_nuclei: b"Metadata_Well\nA01\n"},
+        glob_paths=[],
+    )
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    manifest_df = pd.DataFrame(
+        {
+            "Metadata_Plate": ["GR00004416"],
+            "Metadata_Well": ["A01"],
+            "Metadata_Site": ["3"],
+            "Metadata_Batch": ["20211103-Run16"],
+            "Metadata_Source": ["source_10"],
+            "Nuclei_S3_Path": [f"s3://{remote_nuclei}"],
+            "Cells_S3_Path": [pd.NA],
+            "Cytoplasm_S3_Path": [pd.NA],
+        }
+    )
+    manifest_csv = tmp_path / "manifest.csv"
+    bootstrap_downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        manifest_download_dir=tmp_path / "cache",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+    bootstrap_downloader.save_dataframe_csv(
+        manifest_df[analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS],
+        manifest_csv,
+    )
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        manifest_download_dir=tmp_path / "cache",
+        manifest_csv_path=manifest_csv,
+        parallel=False,
+        workers=1,
+        verbose=False,
+        use_existing_manifest_without_s3_check=True,
+    )
+
+    summary = downloader.download_csvs_from_column(
+        dataframe=manifest_df,
+        column_name="Nuclei_S3_Path",
+        output_root=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 1
+    assert (
+        tmp_path
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
+    ).exists()
+
+
+def test_output_root_arguments_are_validated(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+    )
+    manifest_csv = tmp_path / "manifest.csv"
+    pd.DataFrame(columns=analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS).to_csv(manifest_csv, index=False)
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        manifest_download_dir=tmp_path,
+        manifest_csv_path=manifest_csv,
+        parallel=False,
+        workers=1,
+        verbose=False,
+        use_existing_manifest_without_s3_check=True,
+    )
+
+    dataframe = pd.DataFrame(
+        {
+            "Nuclei_S3_Path": ["s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run/plate/analysis/plate-A01-1/Nuclei.csv"],
+            "OutputRoot": [str(tmp_path / "downloads")],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Provide output_root or output_root_column"):
+        downloader.download_csvs_from_column(
+            dataframe=dataframe,
+            column_name="Nuclei_S3_Path",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+    with pytest.raises(ValueError, match="Provide either output_root or output_root_column, not both"):
+        downloader.download_csvs_from_column(
+            dataframe=dataframe,
+            column_name="Nuclei_S3_Path",
+            output_root=tmp_path / "downloads",
+            output_root_column="OutputRoot",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+    with pytest.raises(ValueError, match="Invalid output root value"):
+        downloader.download_csvs_from_column(
+            dataframe=dataframe,
+            column_name="Nuclei_S3_Path",
+            output_root="   ",
+            parallel=False,
+            workers=1,
+            verbose=False,
+        )
+
+
 def test_parse_analysis_csv_s3_url_rejects_invalid_plate_well_site() -> None:
     with pytest.raises(ValueError, match="Invalid analysis CSV S3 URL"):
         analysis_csv_downloader.parse_analysis_csv_s3_url(
