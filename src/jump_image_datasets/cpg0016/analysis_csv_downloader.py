@@ -15,7 +15,7 @@ from typing import Optional
 import pandas as pd
 import s3fs
 
-from .load_data_with_illum_downloader import (
+from jump_image_datasets.cpg0016.load_data_with_illum_downloader import (
     CPG0016_BUCKET,
     CPG0016_PREFIX,
     DownloadJob,

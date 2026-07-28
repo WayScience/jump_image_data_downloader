@@ -1,6 +1,6 @@
 """Utilities for downloading and accessing CPG0016 metadata and files."""
 
-from .load_data_with_illum_downloader import (
+from jump_image_datasets.cpg0016.load_data_with_illum_downloader import (
     CPG0016LoadDataWithIllumDownloader,
     LOAD_DATA_WITH_ILLUM_CSV_GLOB_PATTERN,
     CPG0016_BUCKET,
@@ -10,7 +10,7 @@ from .load_data_with_illum_downloader import (
     ILLUMINATION_COLUMNS,
     IMAGE_COLUMNS,
 )
-from .analysis_csv_downloader import (
+from jump_image_datasets.cpg0016.analysis_csv_downloader import (
     ANALYSIS_CSV_COLUMNS,
     ANALYSIS_CSV_GLOB_PATTERN,
     ANALYSIS_MANIFEST_COLUMNS,
