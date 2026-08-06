@@ -1,53 +1,37 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Discover and download CPG0016 profiles CSVs
+# # Download and iterate through CPG0016 profiles CSV folders
 
 from pathlib import Path
 
 from jump_image_datasets.cpg0016 import CPG0016AnalysisCSVDownloader
 
 
-# Build the profiles-path manifest from S3 and save it where you choose.
+# Discover all analysis CSVs from S3 and download them into an organized local
+# folder structure rooted at ``downloaded_profiles_csvs``.
 downloader = CPG0016AnalysisCSVDownloader(
-    manifest_download_dir=Path("profiles_manifest_cache"),
-    manifest_csv_path=Path("downloaded_cpg0016_profiles_paths.csv"),
+    output_dir=Path("downloaded_profiles_csvs"),
     parallel=True,
     workers=8,
 )
-profiles_df = downloader.get_dataframe()
-print(f"Profiles manifest shape: {profiles_df.shape}")
-profiles_df.head()
+summary = downloader.download_all_csv_profiles()
+print(summary)
 
 
-# Reuse the previously saved manifest later without querying S3 again.
-cached_downloader = CPG0016AnalysisCSVDownloader(
-    manifest_download_dir=Path("profiles_manifest_cache"),
-    manifest_csv_path=Path("downloaded_cpg0016_profiles_paths.csv"),
-    use_existing_manifest_without_s3_check=True,
+# Reuse the existing local CSV tree later without checking S3 or probing which
+# files already exist remotely.
+local_only_downloader = CPG0016AnalysisCSVDownloader(
+    output_dir=Path("downloaded_profiles_csvs"),
+    use_existing_csvs_without_s3_check=True,
     parallel=True,
     workers=8,
 )
-cached_profiles_df = cached_downloader.get_dataframe().iloc[:10].copy()
 
 
-# Download one profile CSV type while preserving the S3-relative directory tree
-# under the output root to avoid filename collisions.
-nuclei_summary = cached_downloader.download_csvs_from_column(
-    dataframe=cached_profiles_df,
-    column_name="Nuclei_S3_Path",
-    output_root="downloaded_profiles_csvs",
-    parallel=True,
-    workers=8,
-)
-print(nuclei_summary)
-
-
-# Download all three profile CSV types from the same filtered dataframe.
-all_profiles_summary = cached_downloader.download_csvs_from_columns(
-    dataframe=cached_profiles_df,
-    output_root="downloaded_profiles_csvs",
-    parallel=True,
-    workers=8,
-)
-print(all_profiles_summary)
+# Iterate through one analysis folder at a time and choose your own operations.
+for csv_set in local_only_downloader.iter_analysis_csv_sets():
+    print(csv_set.folder_local_path)
+    print(csv_set.image_local_path)
+    print(csv_set.nuclei_local_path)
+    break

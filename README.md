@@ -82,6 +82,34 @@ downloader.download_files_from_column(
 )
 ```
 
+```python
+from jump_image_datasets.cpg0016 import CPG0016AnalysisCSVDownloader
+
+# Discover all CPG0016 analysis CSVs from S3 and download them into an
+# organized local directory tree.
+downloader = CPG0016AnalysisCSVDownloader(
+    output_dir="downloaded_cpg0016_profiles",
+    parallel=True,
+    workers=8,
+)
+summary = downloader.download_all_csv_profiles()
+print(summary)
+
+# Later, reuse the existing local CSV tree without checking S3.
+local_only_downloader = CPG0016AnalysisCSVDownloader(
+    output_dir="downloaded_cpg0016_profiles",
+    use_existing_csvs_without_s3_check=True,
+)
+
+# Iterate through one analysis folder at a time and choose your own operations,
+# such as reading Image.csv and Nuclei.csv and merging them on ImageNumber.
+for csv_set in local_only_downloader.iter_analysis_csv_sets():
+    print(csv_set.folder_local_path)
+    print(csv_set.image_local_path)
+    print(csv_set.nuclei_local_path)
+    break
+```
+
 For full runnable examples, see `docs/download_images_examples.ipynb`, `docs/download_cpg0016_examples.ipynb`, and `docs/download_cpg0016_profiles_examples.ipynb`.
 
 ## Packaged metadata provenance
