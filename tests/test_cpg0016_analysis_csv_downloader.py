@@ -1,7 +1,5 @@
 import io
-
-import pandas as pd
-import pytest
+from pathlib import Path
 
 from jump_image_datasets.cpg0016 import analysis_csv_downloader
 
@@ -36,10 +34,11 @@ class FailIfUsedS3FileSystem:
         raise AssertionError("S3 open should not be called")
 
 
-def test_constructor_discovers_manifest_and_excludes_source_all(tmp_path, monkeypatch) -> None:
+def test_constructor_discovers_csv_sets_and_excludes_source_all(tmp_path, monkeypatch) -> None:
     glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Cells.csv",
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv",
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv",
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Cells.csv",
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Cytoplasm.csv",
         "cellpainting-gallery/cpg0016-jump/source_all/workspace/analysis/run_all/plate_all/analysis/plate_all-A01-1/Nuclei.csv",
         "cellpainting-gallery/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Nuclei.csv",
@@ -52,31 +51,34 @@ def test_constructor_discovers_manifest_and_excludes_source_all(tmp_path, monkey
     )
 
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path,
+        output_dir=tmp_path,
         parallel=False,
         workers=1,
         verbose=False,
     )
 
-    dataframe = downloader.get_dataframe()
-    assert len(downloader.analysis_csv_urls) == 4
+    csv_sets = downloader.get_analysis_csv_sets()
+    assert len(downloader.analysis_csv_urls) == 5
     assert all("/source_all/" not in url for url in downloader.analysis_csv_urls)
-    assert list(dataframe.columns) == analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS
-    assert len(dataframe) == 2
-    assert dataframe.loc[0, "Metadata_Source"] == "source_10"
-    assert dataframe.loc[0, "Metadata_Batch"] == "run_a"
-    assert dataframe.loc[0, "Metadata_Plate"] == "plate_a"
-    assert dataframe.loc[0, "Metadata_Well"] == "A01"
-    assert dataframe.loc[0, "Metadata_Site"] == "1"
-    assert dataframe.loc[0, "Cells_S3_Path"].endswith("Cells.csv")
-    assert dataframe.loc[0, "Cytoplasm_S3_Path"].endswith("Cytoplasm.csv")
-    assert dataframe.loc[0, "Nuclei_S3_Path"].endswith("Nuclei.csv")
+    assert len(csv_sets) == 2
+    assert csv_sets[0].folder_s3_url == (
+        "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/"
+    )
+    assert csv_sets[0].image_s3_url.endswith("Image.csv")
+    assert csv_sets[0].nuclei_s3_url.endswith("Nuclei.csv")
+    assert csv_sets[0].cells_s3_url.endswith("Cells.csv")
+    assert csv_sets[0].cytoplasm_s3_url.endswith("Cytoplasm.csv")
+    assert csv_sets[0].folder_local_path == (
+        tmp_path / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1"
+    )
+    assert csv_sets[1].nuclei_s3_url.endswith("Nuclei.csv")
 
 
-def test_manifest_keeps_rows_when_one_analysis_csv_is_missing(tmp_path, monkeypatch) -> None:
+def test_constructor_supports_deeper_analysis_paths(tmp_path, monkeypatch) -> None:
     glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Nuclei.csv",
-        "cellpainting-gallery/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Cells.csv",
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Image.csv",
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Nuclei.csv",
     ]
 
     monkeypatch.setattr(
@@ -86,93 +88,23 @@ def test_manifest_keeps_rows_when_one_analysis_csv_is_missing(tmp_path, monkeypa
     )
 
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path,
+        output_dir=tmp_path,
         parallel=False,
         workers=1,
         verbose=False,
     )
 
-    dataframe = downloader.get_dataframe()
-    assert len(dataframe) == 1
-    assert pd.isna(dataframe.loc[0, "Cytoplasm_S3_Path"])
-    assert dataframe.loc[0, "Metadata_Site"] == "2"
-
-
-def test_manifest_can_be_saved_and_reused_without_s3(tmp_path, monkeypatch) -> None:
-    manifest_csv_path = tmp_path / "manifests" / "analysis_paths.csv"
-    glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv",
-    ]
-
-    monkeypatch.setattr(
-        analysis_csv_downloader.s3fs,
-        "S3FileSystem",
-        lambda anon=True: FakeS3FileSystem(files={}, glob_paths=glob_paths, anon=anon),
-    )
-    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        manifest_csv_path=manifest_csv_path,
-        parallel=False,
-        workers=1,
-        verbose=False,
+    csv_set = downloader.get_analysis_csv_sets()[0]
+    assert csv_set.folder_relative_path == (
+        Path("cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1")
     )
 
-    assert manifest_csv_path.exists()
-    assert downloader.get_dataframe().loc[0, "Metadata_Site"] == "1"
 
-    monkeypatch.setattr(
-        analysis_csv_downloader.s3fs,
-        "S3FileSystem",
-        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+def test_download_all_csv_profiles_preserves_relative_s3_subdirectories(tmp_path, monkeypatch) -> None:
+    remote_image = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/"
+        "GR00004416/analysis/GR00004416-A01-3/Image.csv"
     )
-    local_only_downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        manifest_csv_path=manifest_csv_path,
-        parallel=False,
-        workers=1,
-        verbose=False,
-        use_existing_manifest_without_s3_check=True,
-    )
-
-    reused_dataframe = local_only_downloader.get_dataframe()
-    assert reused_dataframe.loc[0, "Metadata_Site"] == "1"
-    assert reused_dataframe.loc[0, "Nuclei_S3_Path"].endswith("Nuclei.csv")
-
-
-def test_local_only_mode_requires_existing_manifest_csv(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        analysis_csv_downloader.s3fs,
-        "S3FileSystem",
-        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="manifest_csv_path must be provided when use_existing_manifest_without_s3_check=True",
-    ):
-        analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-            manifest_download_dir=tmp_path,
-            parallel=False,
-            workers=1,
-            verbose=False,
-            use_existing_manifest_without_s3_check=True,
-        )
-
-    with pytest.raises(
-        ValueError,
-        match="manifest_csv_path does not exist; disable use_existing_manifest_without_s3_check to discover it from S3",
-    ):
-        analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-            manifest_download_dir=tmp_path,
-            manifest_csv_path=tmp_path / "missing.csv",
-            parallel=False,
-            workers=1,
-            verbose=False,
-            use_existing_manifest_without_s3_check=True,
-        )
-
-
-def test_download_csvs_from_column_preserves_relative_s3_subdirectories(tmp_path, monkeypatch) -> None:
     remote_nuclei = (
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/"
         "GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
@@ -182,251 +114,123 @@ def test_download_csvs_from_column_preserves_relative_s3_subdirectories(tmp_path
         "GR00004416/analysis/GR00004416-A01-3/Cells.csv"
     )
     files = {
-        remote_nuclei: b"nuclei-data",
-        remote_cells: b"cells-data",
+        remote_image: b"ImageNumber,Metadata_Well\n1,A01\n",
+        remote_nuclei: b"ImageNumber,ObjectNumber\n1,1\n",
+        remote_cells: b"ImageNumber,ObjectNumber\n1,1\n",
     }
 
-    fake_fs = FakeS3FileSystem(files=files, glob_paths=[])
+    fake_fs = FakeS3FileSystem(
+        files=files,
+        glob_paths=[remote_image, remote_nuclei, remote_cells],
+    )
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
         "S3FileSystem",
         lambda anon=True: fake_fs,
     )
 
-    manifest_df = pd.DataFrame(
-        {
-            "Metadata_Plate": ["GR00004416"],
-            "Metadata_Well": ["A01"],
-            "Metadata_Site": ["3"],
-            "Metadata_Batch": ["20211103-Run16"],
-            "Metadata_Source": ["source_10"],
-            "Nuclei_S3_Path": [f"s3://{remote_nuclei}"],
-            "Cells_S3_Path": [f"s3://{remote_cells}"],
-            "Cytoplasm_S3_Path": [pd.NA],
-            "OutputRoot": [str(tmp_path / "downloads")],
-        }
-    )
-    bootstrap_downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        parallel=False,
-        workers=1,
-        verbose=False,
-    )
-    bootstrap_downloader.save_dataframe_csv(
-        manifest_df[analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS],
-        tmp_path / "manifest.csv",
-    )
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        manifest_csv_path=tmp_path / "manifest.csv",
-        parallel=False,
-        workers=1,
-        verbose=False,
-        use_existing_manifest_without_s3_check=True,
-    )
-
-    summary = downloader.download_csvs_from_columns(
-        dataframe=manifest_df,
-        columns=["Nuclei_S3_Path", "Cells_S3_Path"],
-        output_root_column="OutputRoot",
+        output_dir=tmp_path / "downloads",
         parallel=False,
         workers=1,
         verbose=False,
     )
 
-    assert summary.total_jobs == 2
-    assert summary.downloaded == 2
+    summary = downloader.download_all_csv_profiles()
+
+    assert summary.total_jobs == 3
+    assert summary.downloaded == 3
+    assert (
+        tmp_path
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Image.csv"
+    ).exists()
     assert (
         tmp_path
         / "downloads/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
     ).exists()
-    assert (
+    assert fake_fs.opened_paths == [remote_cells, remote_image, remote_nuclei]
+
+    csv_set = next(downloader.iter_analysis_csv_sets())
+    assert csv_set.image_local_path.exists()
+    assert csv_set.nuclei_local_path.exists()
+    assert csv_set.cells_local_path.exists()
+
+
+def test_download_all_csv_profiles_skips_existing_files_without_reopening_s3(tmp_path, monkeypatch) -> None:
+    remote_nuclei = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    local_nuclei = (
         tmp_path
-        / "downloads/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Cells.csv"
-    ).exists()
-    assert fake_fs.opened_paths == [remote_nuclei, remote_cells]
-
-
-def test_invalid_dataframe_values_raise_clear_errors(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        analysis_csv_downloader.s3fs,
-        "S3FileSystem",
-        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv"
     )
-    manifest_csv = tmp_path / "manifest.csv"
-    pd.DataFrame(columns=analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS).to_csv(manifest_csv, index=False)
+    local_nuclei.parent.mkdir(parents=True, exist_ok=True)
+    local_nuclei.write_bytes(b"existing-data")
 
-    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path,
-        manifest_csv_path=manifest_csv,
-        parallel=False,
-        workers=1,
-        verbose=False,
-        use_existing_manifest_without_s3_check=True,
-    )
-
-    with pytest.raises(ValueError, match="columns not found: MissingColumn"):
-        downloader.download_csvs_from_column(
-            dataframe=pd.DataFrame({"OutputRoot": [str(tmp_path)]}),
-            column_name="MissingColumn",
-            output_root_column="OutputRoot",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
-
-    invalid_url_df = pd.DataFrame(
-        {
-            "Nuclei_S3_Path": ["not-an-s3-path"],
-            "OutputRoot": [str(tmp_path / "downloads")],
-        }
-    )
-    with pytest.raises(ValueError, match=r"row index 0.*Nuclei_S3_Path"):
-        downloader.download_csvs_from_column(
-            dataframe=invalid_url_df,
-            column_name="Nuclei_S3_Path",
-            output_root_column="OutputRoot",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
-
-    invalid_output_root_df = pd.DataFrame(
-        {
-            "Nuclei_S3_Path": ["s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run/plate/analysis/plate-A01-1/Nuclei.csv"],
-            "OutputRoot": ["   "],
-        }
-    )
-    with pytest.raises(ValueError, match=r"row index 0.*OutputRoot"):
-        downloader.download_csvs_from_column(
-            dataframe=invalid_output_root_df,
-            column_name="Nuclei_S3_Path",
-            output_root_column="OutputRoot",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
-
-
-def test_download_csvs_accepts_constant_output_root(tmp_path, monkeypatch) -> None:
-    remote_nuclei = "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
-    fake_fs = FakeS3FileSystem(
-        files={remote_nuclei: b"Metadata_Well\nA01\n"},
-        glob_paths=[],
-    )
+    fake_fs = FakeS3FileSystem(files={remote_nuclei: b"new-data"}, glob_paths=[remote_nuclei])
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
         "S3FileSystem",
         lambda anon=True: fake_fs,
     )
 
-    manifest_df = pd.DataFrame(
-        {
-            "Metadata_Plate": ["GR00004416"],
-            "Metadata_Well": ["A01"],
-            "Metadata_Site": ["3"],
-            "Metadata_Batch": ["20211103-Run16"],
-            "Metadata_Source": ["source_10"],
-            "Nuclei_S3_Path": [f"s3://{remote_nuclei}"],
-            "Cells_S3_Path": [pd.NA],
-            "Cytoplasm_S3_Path": [pd.NA],
-        }
-    )
-    manifest_csv = tmp_path / "manifest.csv"
-    bootstrap_downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        parallel=False,
-        workers=1,
-        verbose=False,
-    )
-    bootstrap_downloader.save_dataframe_csv(
-        manifest_df[analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS],
-        manifest_csv,
-    )
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path / "cache",
-        manifest_csv_path=manifest_csv,
+        output_dir=tmp_path / "downloads",
         parallel=False,
         workers=1,
         verbose=False,
-        use_existing_manifest_without_s3_check=True,
     )
 
-    summary = downloader.download_csvs_from_column(
-        dataframe=manifest_df,
-        column_name="Nuclei_S3_Path",
-        output_root=tmp_path / "downloads",
-        parallel=False,
-        workers=1,
-        verbose=False,
-    )
+    summary = downloader.download_all_csv_profiles()
 
     assert summary.total_jobs == 1
-    assert summary.downloaded == 1
-    assert (
+    assert summary.downloaded == 0
+    assert summary.skipped == 1
+    assert fake_fs.opened_paths == []
+    assert local_nuclei.read_bytes() == b"existing-data"
+
+
+def test_local_only_mode_uses_existing_downloads_without_s3(tmp_path, monkeypatch) -> None:
+    local_image = (
         tmp_path
-        / "downloads/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Nuclei.csv"
-    ).exists()
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    local_nuclei = local_image.with_name("Nuclei.csv")
+    local_image.parent.mkdir(parents=True, exist_ok=True)
+    local_image.write_text("ImageNumber\n1\n")
+    local_nuclei.write_text("ImageNumber\n1\n")
 
-
-def test_output_root_arguments_are_validated(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
         "S3FileSystem",
         lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
     )
-    manifest_csv = tmp_path / "manifest.csv"
-    pd.DataFrame(columns=analysis_csv_downloader.ANALYSIS_MANIFEST_COLUMNS).to_csv(manifest_csv, index=False)
 
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        manifest_download_dir=tmp_path,
-        manifest_csv_path=manifest_csv,
+        output_dir=tmp_path / "downloads",
         parallel=False,
         workers=1,
         verbose=False,
-        use_existing_manifest_without_s3_check=True,
+        use_existing_csvs_without_s3_check=True,
     )
 
-    dataframe = pd.DataFrame(
-        {
-            "Nuclei_S3_Path": ["s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run/plate/analysis/plate-A01-1/Nuclei.csv"],
-            "OutputRoot": [str(tmp_path / "downloads")],
-        }
-    )
+    csv_sets = list(downloader.iter_analysis_csv_sets())
+    assert len(csv_sets) == 1
+    assert csv_sets[0].folder_s3_url is None
+    assert csv_sets[0].image_local_path == local_image
+    assert csv_sets[0].nuclei_local_path == local_nuclei
 
-    with pytest.raises(ValueError, match="Provide output_root or output_root_column"):
-        downloader.download_csvs_from_column(
-            dataframe=dataframe,
-            column_name="Nuclei_S3_Path",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
-
-    with pytest.raises(ValueError, match="Provide either output_root or output_root_column, not both"):
-        downloader.download_csvs_from_column(
-            dataframe=dataframe,
-            column_name="Nuclei_S3_Path",
-            output_root=tmp_path / "downloads",
-            output_root_column="OutputRoot",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
-
-    with pytest.raises(ValueError, match="Invalid output root value"):
-        downloader.download_csvs_from_column(
-            dataframe=dataframe,
-            column_name="Nuclei_S3_Path",
-            output_root="   ",
-            parallel=False,
-            workers=1,
-            verbose=False,
-        )
+    summary = downloader.download_all_csv_profiles()
+    assert summary.total_jobs == 0
+    assert summary.downloaded == 0
+    assert summary.skipped == 0
 
 
-def test_parse_analysis_csv_s3_url_rejects_invalid_plate_well_site() -> None:
-    with pytest.raises(ValueError, match="Invalid analysis CSV S3 URL"):
-        analysis_csv_downloader.parse_analysis_csv_s3_url(
-            "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/other_plate-A01-1/Nuclei.csv"
-        )
+def test_constructor_requires_output_dir() -> None:
+    try:
+        analysis_csv_downloader.CPG0016AnalysisCSVDownloader(output_dir=None)
+    except ValueError as exc:
+        assert str(exc) == "output_dir must be provided"
+    else:
+        raise AssertionError("Expected ValueError")
