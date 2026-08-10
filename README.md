@@ -37,6 +37,13 @@ pip install "git+https://github.com/WayScience/jump_image_data_downloader.git"
 
 Install from GitHub if you want the latest unreleased changes.
 
+### AWS CLI requirement for CPG0016 analysis CSV downloads
+
+Bulk downloading CPG0016 `workspace/analysis` CSVs with `CPG0016AnalysisCSVDownloader`
+requires the AWS CLI to be installed and available as `aws` on your `PATH`.
+The downloader uses the AWS CLI transfer manager for faster recursive CSV
+downloads from the public S3 bucket.
+
 ## Usage
 
 ```python
@@ -82,7 +89,43 @@ downloader.download_files_from_column(
 )
 ```
 
-For a full runnable example, see `docs/download_images_examples.ipynb` and `docs/download_cpg0016_examples.ipynb`.
+```python
+from jump_image_datasets.cpg0016 import CPG0016AnalysisCSVDownloader
+
+# Discover all CPG0016 analysis CSVs from S3 and download them into an
+# organized local directory tree.
+downloader = CPG0016AnalysisCSVDownloader(
+    output_dir="downloaded_cpg0016_profiles",
+    parallel=True,
+    max_concurrent_requests=50,
+)
+
+# Omit csv_names to download all standard profile CSVs.
+summary = downloader.download_all_csv_profiles()
+print(summary)
+
+# Or download only a selected subset.
+nuclei_and_image_summary = downloader.download_all_csv_profiles(
+    csv_names=["nuclei", "image"],
+)
+print(nuclei_and_image_summary)
+
+# Later, reuse the existing local CSV tree without checking S3.
+local_only_downloader = CPG0016AnalysisCSVDownloader(
+    output_dir="downloaded_cpg0016_profiles",
+    use_existing_csvs_without_s3_check=True,
+)
+
+# Iterate through one analysis folder at a time and choose your own operations,
+# such as reading Image.csv and Nuclei.csv and merging them on ImageNumber.
+for csv_set in local_only_downloader.iter_analysis_csv_sets():
+    print(csv_set.folder_local_path)
+    print(csv_set.image_local_path)
+    print(csv_set.nuclei_local_path)
+    break
+```
+
+For full runnable examples, see `docs/download_images_examples.ipynb`, `docs/download_cpg0016_examples.ipynb`, and `docs/download_cpg0016_profiles_examples.ipynb`.
 
 ## Packaged metadata provenance
 
