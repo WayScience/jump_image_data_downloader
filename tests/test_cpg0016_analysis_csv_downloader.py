@@ -16,21 +16,14 @@ def _copy_test_csv_tree(destination: Path) -> None:
 
 
 class FakeS3FileSystem:
-    def __init__(
-        self,
-        files: dict[str, bytes],
-        glob_paths: list[str],
-        anon: bool = True,
-        expected_glob_pattern: str | None = None,
-    ):
+    def __init__(self, files: dict[str, bytes], glob_paths: list[str], anon: bool = True):
         self.files = files
         self.glob_paths = glob_paths
         self.anon = anon
-        self.expected_glob_pattern = expected_glob_pattern or analysis_csv_downloader.ANALYSIS_CSV_GLOB_PATTERN
         self.opened_paths: list[str] = []
 
     def glob(self, pattern: str) -> list[str]:
-        assert pattern == self.expected_glob_pattern
+        assert pattern == analysis_csv_downloader.ANALYSIS_CSV_GLOB_PATTERN
         return list(self.glob_paths)
 
     def open(self, remote_path: str, mode: str):
@@ -77,43 +70,6 @@ def test_discover_analysis_csv_urls_excludes_source_all(tmp_path, monkeypatch) -
 
     assert len(downloader.analysis_csv_urls) == 5
     assert all("/source_all/" not in url for url in downloader.analysis_csv_urls)
-
-
-def test_discover_analysis_csv_urls_uses_custom_glob_pattern(tmp_path, monkeypatch) -> None:
-    custom_glob_pattern = (
-        "cellpainting-gallery/cpg0016-jump/source_3/"
-        "workspace/analysis/CP60/BR5873d3W/analysis/**/*.csv"
-    )
-    glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Image.csv",
-        "cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Nuclei.csv",
-    ]
-
-    monkeypatch.setattr(
-        analysis_csv_downloader.s3fs,
-        "S3FileSystem",
-        lambda anon=True: FakeS3FileSystem(
-            files={},
-            glob_paths=glob_paths,
-            anon=anon,
-            expected_glob_pattern=custom_glob_pattern,
-        ),
-    )
-
-    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        output_dir=tmp_path,
-        parallel=False,
-        workers=1,
-        verbose=False,
-        analysis_csv_glob_pattern=custom_glob_pattern,
-    )
-
-    assert downloader.analysis_csv_urls == [
-        "s3://cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Image.csv",
-        "s3://cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Nuclei.csv",
-    ]
-
-
 def test_build_analysis_csv_sets_from_local_paths_uses_realistic_fixture_subset(tmp_path) -> None:
     _copy_test_csv_tree(tmp_path)
 

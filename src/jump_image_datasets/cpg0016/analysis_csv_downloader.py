@@ -308,9 +308,6 @@ class CPG0016AnalysisCSVDownloader:
     use_existing_csvs_without_s3_check
         If ``True``, do not query S3 at all. Instead, inspect ``output_dir`` and
         build grouped CSV records from already-downloaded files.
-    analysis_csv_glob_pattern
-        Optional S3 glob override used for remote CSV discovery. Defaults to the
-        full dataset-wide ``workspace/analysis`` search pattern.
     """
 
     def __init__(
@@ -321,7 +318,6 @@ class CPG0016AnalysisCSVDownloader:
         parallel: bool = True,
         verbose: bool = True,
         use_existing_csvs_without_s3_check: bool = False,
-        analysis_csv_glob_pattern: str | None = None,
     ) -> None:
         """Initialize the analysis CSV downloader in S3 or local-only mode."""
 
@@ -334,7 +330,6 @@ class CPG0016AnalysisCSVDownloader:
         self.parallel = parallel
         self.verbose = verbose
         self.use_existing_csvs_without_s3_check = use_existing_csvs_without_s3_check
-        self.analysis_csv_glob_pattern = analysis_csv_glob_pattern or ANALYSIS_CSV_GLOB_PATTERN
 
         if self.use_existing_csvs_without_s3_check:
             self.analysis_csv_urls: list[str] = []
@@ -358,7 +353,7 @@ class CPG0016AnalysisCSVDownloader:
 
         # Full analysis CSV discovery is large and can take multiple days in practice.
         fs = s3fs.S3FileSystem(anon=True)
-        remote_paths = sorted(fs.glob(self.analysis_csv_glob_pattern))
+        remote_paths = sorted(fs.glob(ANALYSIS_CSV_GLOB_PATTERN))
         analysis_csv_urls: list[str] = []
         for remote_path in remote_paths:
             if is_source_all_path(remote_path):
