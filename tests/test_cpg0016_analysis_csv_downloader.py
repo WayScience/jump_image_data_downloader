@@ -16,14 +16,21 @@ def _copy_test_csv_tree(destination: Path) -> None:
 
 
 class FakeS3FileSystem:
-    def __init__(self, files: dict[str, bytes], glob_paths: list[str], anon: bool = True):
+    def __init__(
+        self,
+        files: dict[str, bytes],
+        glob_paths: list[str],
+        anon: bool = True,
+        expected_glob_pattern: str | None = None,
+    ):
         self.files = files
         self.glob_paths = glob_paths
         self.anon = anon
+        self.expected_glob_pattern = expected_glob_pattern or analysis_csv_downloader.ANALYSIS_CSV_GLOB_PATTERN
         self.opened_paths: list[str] = []
 
     def glob(self, pattern: str) -> list[str]:
-        assert pattern == analysis_csv_downloader.ANALYSIS_CSV_GLOB_PATTERN
+        assert pattern == self.expected_glob_pattern
         return list(self.glob_paths)
 
     def open(self, remote_path: str, mode: str):
@@ -70,6 +77,41 @@ def test_discover_analysis_csv_urls_excludes_source_all(tmp_path, monkeypatch) -
 
     assert len(downloader.analysis_csv_urls) == 5
     assert all("/source_all/" not in url for url in downloader.analysis_csv_urls)
+
+
+def test_discover_analysis_csv_urls_uses_custom_glob_pattern(tmp_path, monkeypatch) -> None:
+    custom_glob_pattern = (
+        "cellpainting-gallery/cpg0016-jump/source_3/"
+        "workspace/analysis/CP60/BR5873d3W/analysis/**/*.csv"
+    )
+    glob_paths = [
+        "cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Image.csv",
+        "cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Nuclei.csv",
+    ]
+
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(
+            files={},
+            glob_paths=glob_paths,
+            anon=anon,
+            expected_glob_pattern=custom_glob_pattern,
+        ),
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+        analysis_csv_glob_pattern=custom_glob_pattern,
+    )
+
+    assert downloader.analysis_csv_urls == [
+        "s3://cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Image.csv",
+        "s3://cellpainting-gallery/cpg0016-jump/source_3/workspace/analysis/CP60/BR5873d3W/analysis/Nuclei.csv",
+    ]
 
 
 def test_build_analysis_csv_sets_from_local_paths_uses_realistic_fixture_subset(tmp_path) -> None:
@@ -208,6 +250,35 @@ def test_download_all_csv_profiles_preserves_relative_s3_subdirectories(tmp_path
     assert csv_set.cells_local_path.exists()
 
 
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_path, monkeypatch) -> None:
+    remote_image = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    fake_fs = FakeS3FileSystem(
+        files={remote_image: b"ImageNumber,Metadata_Source\n1,wrong_source\n"},
+        glob_paths=[remote_image],
+    )
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+    downloader.download_all_csv_profiles()
+
+    csv_set = next(downloader.iter_analysis_csv_sets())
+    dataframe = csv_set.read_csv("Image.csv")
+
+    assert dataframe.loc[0, "Metadata_Source"] == "source_10"
+
+
 def test_download_all_csv_profiles_skips_existing_files_without_reopening_s3(tmp_path, monkeypatch) -> None:
     remote_nuclei = (
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
@@ -277,6 +348,34 @@ def test_local_only_mode_uses_existing_downloads_without_s3(tmp_path, monkeypatc
     assert summary.total_jobs == 0
     assert summary.downloaded == 0
     assert summary.skipped == 0
+
+
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_local_path(tmp_path, monkeypatch) -> None:
+    local_image = (
+        tmp_path
+        / "downloads/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Image.csv"
+    )
+    local_image.parent.mkdir(parents=True, exist_ok=True)
+    local_image.write_text("ImageNumber,Metadata_Source\n1,wrong_source\n")
+
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+        use_existing_csvs_without_s3_check=True,
+    )
+
+    csv_set = next(downloader.iter_analysis_csv_sets())
+    dataframe = csv_set.read_csv("Image.csv")
+
+    assert dataframe.loc[0, "Metadata_Source"] == "source_11"
 
 
 def test_constructor_requires_output_dir() -> None:

@@ -234,34 +234,6 @@ def s3_url_to_filename(s3_url: str) -> str:
     return filename
 
 
-def extract_metadata_source_from_s3_url(s3_url: str) -> str:
-    """Extract the CPG0016 source segment from a metadata CSV S3 URL.
-
-    Parameters
-    ----------
-    s3_url
-        Fully qualified S3 URL under ``s3://cellpainting-gallery/cpg0016-jump``.
-
-    Returns
-    -------
-    str
-        The source path segment, for example ``source_10``.
-
-    Raises
-    ------
-    ValueError
-        If ``s3_url`` is not a valid CPG0016 URL with a source segment.
-    """
-
-    parsed = urlparse(s3_url)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if parsed.scheme != "s3" or parsed.netloc != CPG0016_BUCKET:
-        raise ValueError(f"Invalid CPG0016 S3 URL: {s3_url}")
-    if len(path_parts) < 2 or path_parts[0] != CPG0016_PREFIX:
-        raise ValueError(f"Invalid CPG0016 S3 URL: {s3_url}")
-    return path_parts[1]
-
-
 def download_one(
     fs: s3fs.S3FileSystem,
     job: DownloadJob,
@@ -640,7 +612,6 @@ class CPG0016LoadDataWithIllumDownloader:
         dataframes: list[pd.DataFrame] = []
         for job in self.csv_jobs:
             dataframe = pd.read_csv(job.local_path)
-            dataframe["Metadata_Source"] = extract_metadata_source_from_s3_url(job.s3_url)
             dataframe["Metadata_LoadDataCSVPath"] = str(job.local_path)
             dataframe["Metadata_LoadDataCSVURL"] = job.s3_url
             dataframes.append(dataframe)

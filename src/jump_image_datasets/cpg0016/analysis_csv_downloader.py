@@ -12,7 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
+from urllib.parse import urlparse
 
+import pandas as pd
 import s3fs
 
 from jump_image_datasets.cpg0016.load_data_with_illum_downloader import (
@@ -71,6 +73,68 @@ class AnalysisCSVSet:
     cytoplasm_local_path: Optional[Path] = None
     other_s3_urls: dict[str, str] = field(default_factory=dict)
     other_local_paths: dict[str, Path] = field(default_factory=dict)
+
+    def read_csv(self, filename: str) -> pd.DataFrame:
+        """Read one analysis CSV and overwrite ``Metadata_Source`` from its path."""
+
+        local_path = self._get_local_path(filename)
+        source_path = self._get_source_path(filename)
+        dataframe = pd.read_csv(local_path)
+        dataframe["Metadata_Source"] = extract_metadata_source_from_dataset_path(source_path)
+        return dataframe
+
+    def _get_local_path(self, filename: str) -> Path:
+        local_path = self._get_local_path_or_none(filename)
+        if local_path is None:
+            raise ValueError(f"CSV not available in this analysis set: {filename}")
+        return local_path
+
+    def _get_source_path(self, filename: str) -> str:
+        s3_url = self._get_s3_url_or_none(filename)
+        if s3_url is not None:
+            return s3_url
+        return str(self._get_local_path(filename))
+
+    def _get_local_path_or_none(self, filename: str) -> Optional[Path]:
+        if filename == "Image.csv":
+            return self.image_local_path
+        if filename == "Nuclei.csv":
+            return self.nuclei_local_path
+        if filename == "Cells.csv":
+            return self.cells_local_path
+        if filename == "Cytoplasm.csv":
+            return self.cytoplasm_local_path
+        return self.other_local_paths.get(filename)
+
+    def _get_s3_url_or_none(self, filename: str) -> Optional[str]:
+        if filename == "Image.csv":
+            return self.image_s3_url
+        if filename == "Nuclei.csv":
+            return self.nuclei_s3_url
+        if filename == "Cells.csv":
+            return self.cells_s3_url
+        if filename == "Cytoplasm.csv":
+            return self.cytoplasm_s3_url
+        return self.other_s3_urls.get(filename)
+
+
+def extract_metadata_source_from_dataset_path(path_str: str | Path) -> str:
+    """Extract the CPG0016 source segment from an S3 URL or mirrored local path."""
+
+    raw_path = str(path_str).strip()
+    parsed = urlparse(raw_path)
+    if parsed.scheme == "s3":
+        if parsed.netloc != CPG0016_BUCKET:
+            raise ValueError(f"Invalid CPG0016 dataset path: {path_str}")
+        path_parts = [part for part in parsed.path.split("/") if part]
+    else:
+        path_parts = [part for part in raw_path.replace("\\", "/").split("/") if part]
+
+    try:
+        prefix_index = path_parts.index(CPG0016_PREFIX)
+        return path_parts[prefix_index + 1]
+    except (ValueError, IndexError) as exc:
+        raise ValueError(f"Invalid CPG0016 dataset path: {path_str}") from exc
 
 
 def _copy_analysis_csv_set(csv_set: AnalysisCSVSet) -> AnalysisCSVSet:
@@ -244,6 +308,9 @@ class CPG0016AnalysisCSVDownloader:
     use_existing_csvs_without_s3_check
         If ``True``, do not query S3 at all. Instead, inspect ``output_dir`` and
         build grouped CSV records from already-downloaded files.
+    analysis_csv_glob_pattern
+        Optional S3 glob override used for remote CSV discovery. Defaults to the
+        full dataset-wide ``workspace/analysis`` search pattern.
     """
 
     def __init__(
@@ -254,6 +321,7 @@ class CPG0016AnalysisCSVDownloader:
         parallel: bool = True,
         verbose: bool = True,
         use_existing_csvs_without_s3_check: bool = False,
+        analysis_csv_glob_pattern: str | None = None,
     ) -> None:
         """Initialize the analysis CSV downloader in S3 or local-only mode."""
 
@@ -266,6 +334,7 @@ class CPG0016AnalysisCSVDownloader:
         self.parallel = parallel
         self.verbose = verbose
         self.use_existing_csvs_without_s3_check = use_existing_csvs_without_s3_check
+        self.analysis_csv_glob_pattern = analysis_csv_glob_pattern or ANALYSIS_CSV_GLOB_PATTERN
 
         if self.use_existing_csvs_without_s3_check:
             self.analysis_csv_urls: list[str] = []
@@ -289,7 +358,7 @@ class CPG0016AnalysisCSVDownloader:
 
         # Full analysis CSV discovery is large and can take multiple days in practice.
         fs = s3fs.S3FileSystem(anon=True)
-        remote_paths = sorted(fs.glob(ANALYSIS_CSV_GLOB_PATTERN))
+        remote_paths = sorted(fs.glob(self.analysis_csv_glob_pattern))
         analysis_csv_urls: list[str] = []
         for remote_path in remote_paths:
             if is_source_all_path(remote_path):
