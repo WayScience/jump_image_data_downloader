@@ -1,7 +1,18 @@
 import io
+import os
+import shutil
 from pathlib import Path
 
+import pytest
+
 from jump_image_datasets.cpg0016 import analysis_csv_downloader
+
+
+TEST_DATA_DIR = Path(__file__).parent / "data" / "cpg0016"
+
+
+def _copy_test_csv_tree(destination: Path) -> None:
+    shutil.copytree(TEST_DATA_DIR / "cpg0016-jump", destination / "cpg0016-jump")
 
 
 class FakeS3FileSystem:
@@ -34,7 +45,7 @@ class FailIfUsedS3FileSystem:
         raise AssertionError("S3 open should not be called")
 
 
-def test_constructor_discovers_csv_sets_and_excludes_source_all(tmp_path, monkeypatch) -> None:
+def test_discover_analysis_csv_urls_excludes_source_all(tmp_path, monkeypatch) -> None:
     glob_paths = [
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv",
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv",
@@ -57,47 +68,88 @@ def test_constructor_discovers_csv_sets_and_excludes_source_all(tmp_path, monkey
         verbose=False,
     )
 
-    csv_sets = downloader.get_analysis_csv_sets()
     assert len(downloader.analysis_csv_urls) == 5
     assert all("/source_all/" not in url for url in downloader.analysis_csv_urls)
-    assert len(csv_sets) == 2
-    assert csv_sets[0].folder_s3_url == (
-        "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
-        "plate_a/analysis/plate_a-A01-1/"
-    )
-    assert csv_sets[0].image_s3_url.endswith("Image.csv")
-    assert csv_sets[0].nuclei_s3_url.endswith("Nuclei.csv")
-    assert csv_sets[0].cells_s3_url.endswith("Cells.csv")
-    assert csv_sets[0].cytoplasm_s3_url.endswith("Cytoplasm.csv")
-    assert csv_sets[0].folder_local_path == (
-        tmp_path / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1"
-    )
-    assert csv_sets[1].nuclei_s3_url.endswith("Nuclei.csv")
 
 
-def test_constructor_supports_deeper_analysis_paths(tmp_path, monkeypatch) -> None:
-    glob_paths = [
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Image.csv",
-        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Nuclei.csv",
-    ]
+def test_build_analysis_csv_sets_from_local_paths_uses_realistic_fixture_subset(tmp_path) -> None:
+    _copy_test_csv_tree(tmp_path)
+
+    local_paths = sorted((tmp_path / "cpg0016-jump").rglob("workspace/analysis/**/*.csv"))
+    csv_sets = analysis_csv_downloader.build_analysis_csv_sets_from_local_paths(
+        local_paths,
+        output_dir=tmp_path,
+    )
+
+    assert len(csv_sets) == 3
+    assert csv_sets[0].folder_s3_url is None
+    assert csv_sets[0].folder_relative_path == (
+        Path("cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1")
+    )
+    assert csv_sets[0].image_local_path == (
+        tmp_path
+        / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    assert csv_sets[0].nuclei_local_path == (
+        tmp_path
+        / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    assert csv_sets[0].cells_local_path == (
+        tmp_path
+        / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Cells.csv"
+    )
+    assert csv_sets[0].cytoplasm_local_path is None
+    assert csv_sets[1].folder_relative_path == (
+        Path(
+            "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/"
+            "subdir_a/plate_a-A01-1"
+        )
+    )
+    assert csv_sets[1].image_local_path == (
+        tmp_path
+        / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Image.csv"
+    )
+    assert csv_sets[1].nuclei_local_path == (
+        tmp_path
+        / "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1/Nuclei.csv"
+    )
+    assert csv_sets[2].folder_relative_path == (
+        Path("cpg0016-jump/source_all/workspace/analysis/run_all/plate_all/analysis/plate_all-A01-1")
+    )
+
+
+def test_local_only_mode_uses_realistic_fixture_subset_and_skips_source_all(tmp_path, monkeypatch) -> None:
+    _copy_test_csv_tree(tmp_path / "downloads")
 
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
         "S3FileSystem",
-        lambda anon=True: FakeS3FileSystem(files={}, glob_paths=glob_paths, anon=anon),
+        lambda anon=True: FailIfUsedS3FileSystem(anon=anon),
     )
 
     downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
-        output_dir=tmp_path,
+        output_dir=tmp_path / "downloads",
         parallel=False,
         workers=1,
         verbose=False,
+        use_existing_csvs_without_s3_check=True,
     )
 
-    csv_set = downloader.get_analysis_csv_sets()[0]
-    assert csv_set.folder_relative_path == (
-        Path("cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/subdir_a/plate_a-A01-1")
+    csv_sets = downloader.get_analysis_csv_sets()
+    assert len(csv_sets) == 2
+    assert all("source_all" not in str(csv_set.folder_relative_path) for csv_set in csv_sets)
+    assert csv_sets[0].folder_s3_url is None
+    assert csv_sets[0].image_local_path.exists()
+    assert csv_sets[0].nuclei_local_path.exists()
+    assert csv_sets[0].cells_local_path.exists()
+    assert csv_sets[1].folder_relative_path == (
+        Path(
+            "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/"
+            "subdir_a/plate_a-A01-1"
+        )
     )
+    assert csv_sets[1].image_local_path.exists()
+    assert csv_sets[1].nuclei_local_path.exists()
 
 
 def test_download_all_csv_profiles_preserves_relative_s3_subdirectories(tmp_path, monkeypatch) -> None:
@@ -234,3 +286,20 @@ def test_constructor_requires_output_dir() -> None:
         assert str(exc) == "output_dir must be provided"
     else:
         raise AssertionError("Expected ValueError")
+
+
+@pytest.mark.skipif(
+    os.environ.get("JUMP_RUN_S3_TESTS") != "1",
+    reason="Set JUMP_RUN_S3_TESTS=1 to run live public S3 discovery checks.",
+)
+def test_live_s3_discovery_excludes_source_all(tmp_path) -> None:
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    assert downloader.analysis_csv_urls
+    assert all(url.startswith("s3://cellpainting-gallery/cpg0016-jump/") for url in downloader.analysis_csv_urls)
+    assert all("/source_all/" not in url for url in downloader.analysis_csv_urls)
