@@ -117,6 +117,39 @@ def test_get_dataframe_concatenates_downloaded_csvs_with_provenance(tmp_path, mo
     assert "Metadata_LoadDataCSVURL" in dataframe.columns
 
 
+def test_get_dataframe_overwrites_metadata_source_from_csv_path(tmp_path, monkeypatch) -> None:
+    glob_paths = [
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/load_data_csv/run_a/plate_a/load_data_with_illum.csv",
+    ]
+    files = {
+        glob_paths[0]: _csv_bytes(
+            [
+                {
+                    "URL_IllumAGP": "s3://cellpainting-gallery/cpg0016-jump/source_10/images/run_a/plate_a/agp.npy",
+                    "Metadata_Source": "wrong_source",
+                }
+            ]
+        ),
+    }
+
+    monkeypatch.setattr(
+        load_data_with_illum_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: FakeS3FileSystem(files=files, glob_paths=glob_paths, anon=anon),
+    )
+
+    downloader = load_data_with_illum_downloader.CPG0016LoadDataWithIllumDownloader(
+        csv_download_dir=tmp_path,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    dataframe = downloader.get_dataframe()
+
+    assert dataframe.loc[0, "Metadata_Source"] == "source_10"
+
+
 def test_download_files_from_column_creates_directory_and_deduplicates(tmp_path, monkeypatch) -> None:
     _copy_test_csv_tree(tmp_path / "csvs")
     files = {
