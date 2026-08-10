@@ -9,6 +9,10 @@ profile files such as ``Image.csv``, ``Nuclei.csv``, ``Cells.csv``, and
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
@@ -20,11 +24,9 @@ import s3fs
 from jump_image_datasets.cpg0016.load_data_with_illum_downloader import (
     CPG0016_BUCKET,
     CPG0016_PREFIX,
-    DownloadJob,
     DownloadSummary,
     is_source_all_path,
     remote_path_to_s3_url,
-    run_download_jobs,
     s3_url_to_relative_local_path,
 )
 
@@ -36,6 +38,7 @@ ANALYSIS_PROFILE_FILENAMES = (
     "Cells.csv",
     "Cytoplasm.csv",
 )
+AWS_DEFAULT_MAX_CONCURRENT_REQUESTS = 50
 ANALYSIS_PROFILE_NAME_ALIASES = {
     "image": "Image.csv",
     "image.csv": "Image.csv",
@@ -328,6 +331,31 @@ def build_analysis_csv_sets_from_local_paths(
     return csv_sets
 
 
+def _build_analysis_csv_include_patterns(csv_filenames: Sequence[str]) -> list[str]:
+    """Build AWS CLI include patterns for the requested analysis CSV filenames."""
+
+    return [f"source_*/workspace/analysis/**/{filename}" for filename in csv_filenames]
+
+
+def _create_aws_cli_config(max_concurrent_requests: int) -> str:
+    """Create a temporary AWS CLI config file that sets S3 concurrency."""
+
+    temp_dir = tempfile.mkdtemp(prefix="jump-analysis-aws-")
+    config_path = Path(temp_dir) / "config"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[default]",
+                "s3 =",
+                f"    max_concurrent_requests = {max_concurrent_requests}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return str(config_path)
+
+
 class CPG0016AnalysisCSVDownloader:
     """Discover, iterate, and download CPG0016 analysis CSV folders.
 
@@ -344,6 +372,11 @@ class CPG0016AnalysisCSVDownloader:
     use_existing_csvs_without_s3_check
         If ``True``, do not query S3 at all. Instead, inspect ``output_dir`` and
         build grouped CSV records from already-downloaded files.
+    max_concurrent_requests
+        Maximum number of concurrent S3 requests to allow when the AWS CLI bulk
+        transfer downloads analysis CSVs. This only affects
+        ``download_all_csv_profiles`` and defaults to a higher-throughput value
+        than the AWS CLI default.
     """
 
     def __init__(
@@ -354,11 +387,14 @@ class CPG0016AnalysisCSVDownloader:
         parallel: bool = True,
         verbose: bool = True,
         use_existing_csvs_without_s3_check: bool = False,
+        max_concurrent_requests: int = AWS_DEFAULT_MAX_CONCURRENT_REQUESTS,
     ) -> None:
         """Initialize the analysis CSV downloader in S3 or local-only mode."""
 
         if output_dir is None:
             raise ValueError("output_dir must be provided")
+        if max_concurrent_requests < 1:
+            raise ValueError("max_concurrent_requests must be >= 1")
 
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -366,16 +402,14 @@ class CPG0016AnalysisCSVDownloader:
         self.parallel = parallel
         self.verbose = verbose
         self.use_existing_csvs_without_s3_check = use_existing_csvs_without_s3_check
+        self.max_concurrent_requests = max_concurrent_requests
 
         if self.use_existing_csvs_without_s3_check:
             self.analysis_csv_urls: list[str] = []
-            self.analysis_csv_sets = self.discover_local_analysis_csv_sets()
         else:
-            self.analysis_csv_urls = self.discover_analysis_csv_urls()
-            self.analysis_csv_sets = build_analysis_csv_sets_from_s3_urls(
-                self.analysis_csv_urls,
-                output_dir=self.output_dir,
-            )
+            self.analysis_csv_urls = []
+
+        self.analysis_csv_sets = self.discover_local_analysis_csv_sets()
 
     def discover_analysis_csv_urls(self) -> list[str]:
         """Discover public CPG0016 analysis CSV URLs while excluding ``source_all``.
@@ -407,15 +441,7 @@ class CPG0016AnalysisCSVDownloader:
             ``output_dir``.
         """
 
-        analysis_root = self.output_dir / CPG0016_PREFIX
-        if not analysis_root.exists():
-            return []
-
-        local_paths = [
-            local_path
-            for local_path in sorted(analysis_root.rglob("workspace/analysis/**/*.csv"))
-            if not is_source_all_path(local_path.relative_to(self.output_dir).as_posix())
-        ]
+        local_paths = self._discover_local_analysis_csv_paths()
         return build_analysis_csv_sets_from_local_paths(local_paths, output_dir=self.output_dir)
 
     def get_analysis_csv_sets(self) -> list[AnalysisCSVSet]:
@@ -442,11 +468,12 @@ class CPG0016AnalysisCSVDownloader:
             yield _copy_analysis_csv_set(csv_set)
 
     def download_all_csv_profiles(self, csv_names: Sequence[str] | None = None) -> DownloadSummary:
-        """Download discovered analysis CSV files into ``output_dir``.
+        """Download analysis CSV files into ``output_dir`` with the AWS CLI.
 
-        Existing local files are skipped without being re-downloaded. When
-        ``use_existing_csvs_without_s3_check`` is enabled, this method performs
-        no S3 work and returns an empty summary.
+        This method uses the AWS CLI transfer manager against the public
+        ``cellpainting-gallery`` bucket, then refreshes the grouped local CSV
+        records from disk. When ``use_existing_csvs_without_s3_check`` is
+        enabled, this method performs no S3 work and returns an empty summary.
 
         Parameters
         ----------
@@ -459,47 +486,108 @@ class CPG0016AnalysisCSVDownloader:
         Returns
         -------
         DownloadSummary
-            Aggregate counts for the attempted download run.
+            Aggregate counts for the attempted download run, derived from the
+            local mirror after a successful AWS CLI transfer.
         """
 
         if self.use_existing_csvs_without_s3_check:
             return DownloadSummary(total_jobs=0, downloaded=0, skipped=0, failed=0, failures=[])
 
-        requested_filenames = set(normalize_analysis_csv_filenames(csv_names))
-        filtered_urls = [
-            s3_url
-            for s3_url in self.analysis_csv_urls
-            if Path(urlparse(s3_url).path).name in requested_filenames
-        ]
-        jobs = self._build_download_jobs(filtered_urls)
-        summary = run_download_jobs(
-            jobs,
-            overwrite=False,
-            workers=self.workers,
-            parallel=self.parallel,
-            verbose=self.verbose,
+        requested_filenames = tuple(normalize_analysis_csv_filenames(csv_names))
+        requested_filename_set = set(requested_filenames)
+        preexisting_paths = self._discover_local_analysis_csv_paths(requested_filename_set)
+        self._run_aws_analysis_csv_download(requested_filenames)
+        post_download_paths = self._discover_local_analysis_csv_paths(requested_filename_set)
+
+        self.analysis_csv_urls = [self._local_analysis_csv_path_to_s3_url(path) for path in post_download_paths]
+        self.analysis_csv_sets = build_analysis_csv_sets_from_s3_urls(
+            self.analysis_csv_urls,
+            output_dir=self.output_dir,
         )
-        return summary
 
-    def _build_download_jobs(self, s3_urls: list[str]) -> list[DownloadJob]:
-        """Build unique download jobs while detecting local-path collisions."""
+        preexisting_path_set = set(preexisting_paths)
+        downloaded = sum(1 for path in post_download_paths if path not in preexisting_path_set)
+        skipped = len(post_download_paths) - downloaded
+        return DownloadSummary(
+            total_jobs=len(post_download_paths),
+            downloaded=downloaded,
+            skipped=skipped,
+            failed=0,
+            failures=[],
+        )
 
-        jobs: list[DownloadJob] = []
-        planned_paths: dict[Path, str] = {}
+    def _discover_local_analysis_csv_paths(
+        self,
+        requested_filenames: Optional[set[str]] = None,
+    ) -> list[Path]:
+        """Discover local analysis CSV files under ``output_dir``."""
 
-        for s3_url in s3_urls:
-            relative_path = s3_url_to_relative_local_path(s3_url)
-            local_path = self.output_dir / relative_path
-            existing_s3_url = planned_paths.get(local_path)
-            if existing_s3_url is None:
-                planned_paths[local_path] = s3_url
-                jobs.append(DownloadJob(s3_url=s3_url, local_path=local_path))
-                continue
+        analysis_root = self.output_dir / CPG0016_PREFIX
+        if not analysis_root.exists():
+            return []
 
-            if existing_s3_url != s3_url:
-                raise ValueError(
-                    f"Conflicting S3 URLs for local path {local_path}: "
-                    f"{existing_s3_url!r} and {s3_url!r}"
-                )
+        local_paths = [
+            local_path
+            for local_path in sorted(analysis_root.rglob("workspace/analysis/**/*.csv"))
+            if not is_source_all_path(local_path.relative_to(self.output_dir).as_posix())
+            and (requested_filenames is None or local_path.name in requested_filenames)
+        ]
+        return local_paths
 
-        return jobs
+    def _local_analysis_csv_path_to_s3_url(self, local_path: Path) -> str:
+        """Convert a local analysis CSV path under ``output_dir`` back into its S3 URL."""
+
+        relative_path = local_path.relative_to(self.output_dir).as_posix().lstrip("/")
+        return f"s3://{CPG0016_BUCKET}/{relative_path}"
+
+    def _run_aws_analysis_csv_download(self, requested_filenames: Sequence[str]) -> None:
+        """Download the requested analysis CSVs with the AWS CLI transfer manager."""
+
+        aws_path = shutil.which("aws")
+        if aws_path is None:
+            raise RuntimeError(
+                "AWS CLI is required to download CPG0016 analysis CSVs. Install `aws` and retry."
+            )
+
+        destination_root = self.output_dir / CPG0016_PREFIX
+        destination_root.mkdir(parents=True, exist_ok=True)
+
+        command = [
+            aws_path,
+            "s3",
+            "cp",
+            f"s3://{CPG0016_BUCKET}/{CPG0016_PREFIX}/",
+            str(destination_root),
+            "--recursive",
+            "--exclude",
+            "*",
+            "--exclude",
+            "source_all/*",
+        ]
+        for include_pattern in _build_analysis_csv_include_patterns(requested_filenames):
+            command.extend(["--include", include_pattern])
+        command.extend(["--no-sign-request", "--only-show-errors"])
+
+        effective_max_concurrent_requests = 1 if not self.parallel else self.max_concurrent_requests
+        config_path = _create_aws_cli_config(effective_max_concurrent_requests)
+        config_dir = Path(config_path).parent
+        env = os.environ.copy()
+        env["AWS_CONFIG_FILE"] = config_path
+        env.setdefault("AWS_PAGER", "")
+
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=not self.verbose,
+                text=True,
+                env=env,
+            )
+        finally:
+            shutil.rmtree(config_dir, ignore_errors=True)
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            details = stderr or stdout or f"aws exited with status {result.returncode}"
+            raise RuntimeError(f"AWS CLI analysis CSV download failed: {details}")

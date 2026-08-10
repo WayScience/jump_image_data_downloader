@@ -37,6 +37,13 @@ pip install "git+https://github.com/WayScience/jump_image_data_downloader.git"
 
 Install from GitHub if you want the latest unreleased changes.
 
+### AWS CLI requirement for CPG0016 analysis CSV downloads
+
+Bulk downloading CPG0016 `workspace/analysis` CSVs with `CPG0016AnalysisCSVDownloader`
+requires the AWS CLI to be installed and available as `aws` on your `PATH`.
+The downloader uses the AWS CLI transfer manager for faster recursive CSV
+downloads from the public S3 bucket.
+
 ## Usage
 
 ```python
@@ -90,7 +97,7 @@ from jump_image_datasets.cpg0016 import CPG0016AnalysisCSVDownloader
 downloader = CPG0016AnalysisCSVDownloader(
     output_dir="downloaded_cpg0016_profiles",
     parallel=True,
-    workers=8,
+    max_concurrent_requests=50,
 )
 
 # Omit csv_names to download all standard profile CSVs.

@@ -8,15 +8,19 @@ from pathlib import Path
 from jump_image_datasets.cpg0016 import CPG0016AnalysisCSVDownloader
 
 
-# Discover all analysis CSVs from S3 and download them into an organized local
-# folder structure rooted at ``downloaded_profiles_csvs``.
+# Bulk profile CSV downloads use the AWS CLI transfer manager, so make sure
+# `aws` is installed and available on your PATH before running this example.
+
+# Download all analysis CSVs from S3 into an organized local folder structure
+# rooted at ``downloaded_profiles_csvs``. Files appear in that folder as the AWS
+# CLI transfers them, even though normal per-file transfer logs stay quiet.
 downloader = CPG0016AnalysisCSVDownloader(
     output_dir=Path("downloaded_profiles_csvs"),
     parallel=True,
-    workers=8,
+    max_concurrent_requests=50,
 )
 
-# Omit ``csv_names`` to download all standard analysis CSVs.
+# Omit ``csv_names`` to download all standard profile CSVs.
 summary = downloader.download_all_csv_profiles()
 print(summary)
 
@@ -32,7 +36,6 @@ local_only_downloader = CPG0016AnalysisCSVDownloader(
     output_dir=Path("downloaded_profiles_csvs"),
     use_existing_csvs_without_s3_check=True,
     parallel=True,
-    workers=8,
 )
 
 
