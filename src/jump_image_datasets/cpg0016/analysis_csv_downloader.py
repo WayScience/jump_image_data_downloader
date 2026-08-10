@@ -306,13 +306,13 @@ class CPG0016AnalysisCSVDownloader:
             ``output_dir``.
         """
 
-        dataset_root = self.output_dir / CPG0016_PREFIX
-        if not dataset_root.exists():
+        analysis_root = self.output_dir / CPG0016_PREFIX
+        if not analysis_root.exists():
             return []
 
         local_paths = [
             local_path
-            for local_path in sorted(dataset_root.rglob("*.csv"))
+            for local_path in sorted(analysis_root.rglob("workspace/analysis/**/*.csv"))
             if not is_source_all_path(local_path.relative_to(self.output_dir).as_posix())
         ]
         return build_analysis_csv_sets_from_local_paths(local_paths, output_dir=self.output_dir)
