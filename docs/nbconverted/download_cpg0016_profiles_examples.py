@@ -15,8 +15,15 @@ downloader = CPG0016AnalysisCSVDownloader(
     parallel=True,
     workers=8,
 )
+
+# Omit ``csv_names`` to download all standard analysis CSVs.
 summary = downloader.download_all_csv_profiles()
 print(summary)
+
+
+# Download only a chosen subset when you do not need every profile table.
+subset_summary = downloader.download_all_csv_profiles(csv_names=["nuclei", "image"])
+print(subset_summary)
 
 
 # Reuse the existing local CSV tree later without checking S3 or probing which

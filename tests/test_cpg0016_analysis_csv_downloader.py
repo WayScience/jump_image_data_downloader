@@ -206,6 +206,119 @@ def test_download_all_csv_profiles_preserves_relative_s3_subdirectories(tmp_path
     assert csv_set.cells_local_path.exists()
 
 
+def test_download_all_csv_profiles_can_filter_requested_csvs(tmp_path, monkeypatch) -> None:
+    remote_image = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    remote_nuclei = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    remote_cells = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Cells.csv"
+    )
+    fake_fs = FakeS3FileSystem(
+        files={
+            remote_image: b"ImageNumber\n1\n",
+            remote_nuclei: b"ImageNumber\n1\n",
+            remote_cells: b"ImageNumber\n1\n",
+        },
+        glob_paths=[remote_image, remote_nuclei, remote_cells],
+    )
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    summary = downloader.download_all_csv_profiles(csv_names=["nuclei"])
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 1
+    assert fake_fs.opened_paths == [remote_nuclei]
+    assert list((tmp_path / "downloads").rglob("Image.csv")) == []
+    assert (
+        tmp_path
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    ).exists()
+
+
+def test_download_all_csv_profiles_accepts_mixed_csv_name_forms(tmp_path, monkeypatch) -> None:
+    remote_image = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    remote_nuclei = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    remote_cells = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Cells.csv"
+    )
+    fake_fs = FakeS3FileSystem(
+        files={
+            remote_image: b"ImageNumber\n1\n",
+            remote_nuclei: b"ImageNumber\n1\n",
+            remote_cells: b"ImageNumber\n1\n",
+        },
+        glob_paths=[remote_image, remote_nuclei, remote_cells],
+    )
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    summary = downloader.download_all_csv_profiles(csv_names=["image", "Nuclei.csv", "IMAGE"])
+
+    assert summary.total_jobs == 2
+    assert summary.downloaded == 2
+    assert fake_fs.opened_paths == [remote_image, remote_nuclei]
+
+
+def test_download_all_csv_profiles_rejects_invalid_csv_names(tmp_path, monkeypatch) -> None:
+    remote_image = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Image.csv"
+    )
+    fake_fs = FakeS3FileSystem(
+        files={remote_image: b"ImageNumber\n1\n"},
+        glob_paths=[remote_image],
+    )
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    with pytest.raises(ValueError, match="Invalid analysis CSV names: 'not_a_csv'"):
+        downloader.download_all_csv_profiles(csv_names=["not_a_csv"])
+
+
 def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_path, monkeypatch) -> None:
     remote_image = (
         "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
@@ -268,6 +381,40 @@ def test_download_all_csv_profiles_skips_existing_files_without_reopening_s3(tmp
     assert summary.skipped == 1
     assert fake_fs.opened_paths == []
     assert local_nuclei.read_bytes() == b"existing-data"
+
+
+def test_download_all_csv_profiles_skips_existing_files_when_filtered(tmp_path, monkeypatch) -> None:
+    remote_nuclei = (
+        "cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/run_a/"
+        "plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    local_nuclei = (
+        tmp_path
+        / "downloads/cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv"
+    )
+    local_nuclei.parent.mkdir(parents=True, exist_ok=True)
+    local_nuclei.write_bytes(b"existing-data")
+
+    fake_fs = FakeS3FileSystem(files={remote_nuclei: b"new-data"}, glob_paths=[remote_nuclei])
+    monkeypatch.setattr(
+        analysis_csv_downloader.s3fs,
+        "S3FileSystem",
+        lambda anon=True: fake_fs,
+    )
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    summary = downloader.download_all_csv_profiles(csv_names=["nuclei"])
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 0
+    assert summary.skipped == 1
+    assert fake_fs.opened_paths == []
 
 
 def test_local_only_mode_uses_existing_downloads_without_s3(tmp_path, monkeypatch) -> None:
