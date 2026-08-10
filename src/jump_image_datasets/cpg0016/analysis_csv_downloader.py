@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Sequence
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -36,6 +36,16 @@ ANALYSIS_PROFILE_FILENAMES = (
     "Cells.csv",
     "Cytoplasm.csv",
 )
+ANALYSIS_PROFILE_NAME_ALIASES = {
+    "image": "Image.csv",
+    "image.csv": "Image.csv",
+    "nuclei": "Nuclei.csv",
+    "nuclei.csv": "Nuclei.csv",
+    "cells": "Cells.csv",
+    "cells.csv": "Cells.csv",
+    "cytoplasm": "Cytoplasm.csv",
+    "cytoplasm.csv": "Cytoplasm.csv",
+}
 
 
 @dataclass(frozen=True)
@@ -217,6 +227,32 @@ def _build_analysis_csv_set(
             if filename not in ANALYSIS_PROFILE_FILENAMES
         },
     )
+
+
+def normalize_analysis_csv_filenames(csv_names: Sequence[str] | None) -> tuple[str, ...]:
+    """Normalize requested CSV names to canonical analysis profile filenames."""
+
+    if csv_names is None:
+        return ANALYSIS_PROFILE_FILENAMES
+
+    normalized_names: list[str] = []
+    invalid_names: list[str] = []
+    for csv_name in csv_names:
+        normalized_name = ANALYSIS_PROFILE_NAME_ALIASES.get(str(csv_name).strip().lower())
+        if normalized_name is None:
+            invalid_names.append(str(csv_name))
+            continue
+        if normalized_name not in normalized_names:
+            normalized_names.append(normalized_name)
+
+    if invalid_names:
+        valid_names = ", ".join(ANALYSIS_PROFILE_FILENAMES)
+        invalid_display = ", ".join(repr(name) for name in invalid_names)
+        raise ValueError(
+            f"Invalid analysis CSV names: {invalid_display}. Valid options are: {valid_names}"
+        )
+
+    return tuple(normalized_names)
 
 
 def build_analysis_csv_sets_from_s3_urls(
@@ -405,12 +441,20 @@ class CPG0016AnalysisCSVDownloader:
         for csv_set in self.analysis_csv_sets:
             yield _copy_analysis_csv_set(csv_set)
 
-    def download_all_csv_profiles(self) -> DownloadSummary:
-        """Download all discovered analysis CSV files into ``output_dir``.
+    def download_all_csv_profiles(self, csv_names: Sequence[str] | None = None) -> DownloadSummary:
+        """Download discovered analysis CSV files into ``output_dir``.
 
         Existing local files are skipped without being re-downloaded. When
         ``use_existing_csvs_without_s3_check`` is enabled, this method performs
         no S3 work and returns an empty summary.
+
+        Parameters
+        ----------
+        csv_names
+            Optional subset of analysis CSV names to download. Accepts shorthand
+            names such as ``image`` or ``nuclei`` as well as full filenames such
+            as ``Image.csv`` and ``Nuclei.csv``. When omitted, all standard
+            profile CSVs are downloaded.
 
         Returns
         -------
@@ -421,7 +465,13 @@ class CPG0016AnalysisCSVDownloader:
         if self.use_existing_csvs_without_s3_check:
             return DownloadSummary(total_jobs=0, downloaded=0, skipped=0, failed=0, failures=[])
 
-        jobs = self._build_download_jobs(self.analysis_csv_urls)
+        requested_filenames = set(normalize_analysis_csv_filenames(csv_names))
+        filtered_urls = [
+            s3_url
+            for s3_url in self.analysis_csv_urls
+            if Path(urlparse(s3_url).path).name in requested_filenames
+        ]
+        jobs = self._build_download_jobs(filtered_urls)
         summary = run_download_jobs(
             jobs,
             overwrite=False,
