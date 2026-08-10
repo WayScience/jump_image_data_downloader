@@ -287,6 +287,7 @@ class CPG0016AnalysisCSVDownloader:
             ``workspace/analysis`` tree.
         """
 
+        # Full analysis CSV discovery is large and can take multiple days in practice.
         fs = s3fs.S3FileSystem(anon=True)
         remote_paths = sorted(fs.glob(ANALYSIS_CSV_GLOB_PATTERN))
         analysis_csv_urls: list[str] = []
