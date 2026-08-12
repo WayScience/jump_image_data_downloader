@@ -445,14 +445,16 @@ def test_discover_local_analysis_csv_paths_can_filter_requested_sources(tmp_path
     assert all("source_all" not in path.as_posix() for path in local_paths)
 
 
-def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_path, monkeypatch) -> None:
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_and_batch_from_s3_path(
+    tmp_path, monkeypatch
+) -> None:
     output_dir = tmp_path / "downloads"
 
     def side_effect(command, env, capture_output) -> None:
         _write_downloaded_csv(
             output_dir,
             "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv",
-            "ImageNumber,Metadata_Source\n1,wrong_source\n",
+            "ImageNumber,Metadata_Source,Metadata_Batch\n1,wrong_source,wrong_batch\n",
         )
 
     _install_fake_aws(monkeypatch, side_effect=side_effect)
@@ -469,6 +471,7 @@ def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_p
     dataframe = csv_set.read_csv("Image.csv")
 
     assert dataframe.loc[0, "Metadata_Source"] == "source_10"
+    assert dataframe.loc[0, "Metadata_Batch"] == "run_a"
 
 
 def test_download_all_csv_profiles_reports_existing_files_as_skipped(tmp_path, monkeypatch) -> None:
@@ -587,13 +590,15 @@ def test_local_only_mode_uses_existing_downloads_without_s3(tmp_path, monkeypatc
     assert summary.skipped == 0
 
 
-def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_local_path(tmp_path, monkeypatch) -> None:
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_and_batch_from_local_path(
+    tmp_path, monkeypatch
+) -> None:
     local_image = (
         tmp_path
         / "downloads/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Image.csv"
     )
     local_image.parent.mkdir(parents=True, exist_ok=True)
-    local_image.write_text("ImageNumber,Metadata_Source\n1,wrong_source\n")
+    local_image.write_text("ImageNumber,Metadata_Source,Metadata_Batch\n1,wrong_source,wrong_batch\n")
 
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
@@ -613,6 +618,38 @@ def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_local_path(tm
     dataframe = csv_set.read_csv("Image.csv")
 
     assert dataframe.loc[0, "Metadata_Source"] == "source_11"
+    assert dataframe.loc[0, "Metadata_Batch"] == "run_b"
+
+
+def test_analysis_csv_set_read_csv_skips_metadata_columns_for_malformed_s3_path(monkeypatch) -> None:
+    local_image = Path("/tmp/nonexistent-image.csv")
+    csv_set = analysis_csv_downloader.AnalysisCSVSet(
+        folder_relative_path=Path("cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1"),
+        folder_local_path=local_image.parent,
+        image_local_path=local_image,
+        image_s3_url="s3://cellpainting-gallery/cpg0016-jump/source_10/bad/run_a/Image.csv",
+    )
+
+    dataframe = analysis_csv_downloader.pd.DataFrame({"ImageNumber": [1]})
+    monkeypatch.setattr(
+        analysis_csv_downloader.pd,
+        "read_csv",
+        lambda path: dataframe.copy(deep=True),
+    )
+
+    result = csv_set.read_csv("Image.csv")
+
+    assert "Metadata_Source" not in result.columns
+    assert "Metadata_Batch" not in result.columns
+
+
+def test_extract_metadata_batch_from_dataset_path_reads_analysis_batch_segment() -> None:
+    assert (
+        analysis_csv_downloader.extract_metadata_batch_from_dataset_path(
+            "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Image.csv"
+        )
+        == "20211103-Run16"
+    )
 
 
 def test_constructor_requires_output_dir() -> None:
