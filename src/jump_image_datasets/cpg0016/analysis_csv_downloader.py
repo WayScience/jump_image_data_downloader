@@ -90,7 +90,7 @@ class AnalysisCSVSet:
     other_local_paths: dict[str, Path] = field(default_factory=dict)
 
     def read_csv(self, filename: str) -> pd.DataFrame:
-        """Read one analysis CSV and set ``Metadata_Source`` from its dataset path.
+        """Read one analysis CSV and set path-derived metadata when available.
 
         Parameters
         ----------
@@ -100,14 +100,21 @@ class AnalysisCSVSet:
         Returns
         -------
         pandas.DataFrame
-            Loaded CSV contents with ``Metadata_Source`` overwritten from the
-            dataset-relative source segment encoded in the S3 or local path.
+            Loaded CSV contents with ``Metadata_Source`` and ``Metadata_Batch``
+            overwritten from the dataset path when those segments can be
+            extracted from the S3 or local provenance path.
         """
 
         local_path = self._get_local_path(filename)
         source_path = self._get_source_path(filename)
         dataframe = pd.read_csv(local_path)
-        dataframe["Metadata_Source"] = extract_metadata_source_from_dataset_path(source_path)
+        try:
+            metadata_values = extract_metadata_from_dataset_path(source_path)
+        except ValueError:
+            return dataframe
+
+        dataframe["Metadata_Source"] = metadata_values["Metadata_Source"]
+        dataframe["Metadata_Batch"] = metadata_values["Metadata_Batch"]
         return dataframe
 
     def _get_local_path(self, filename: str) -> Path:
@@ -205,23 +212,48 @@ class AnalysisCSVSet:
         return self.other_s3_urls.get(filename)
 
 
-def extract_metadata_source_from_dataset_path(path_str: str | Path) -> str:
-    """Extract the CPG0016 source segment from an S3 URL or mirrored local path."""
+def _split_dataset_path_parts(path_str: str | Path) -> list[str]:
+    """Return normalized path segments for an S3 URL or mirrored local path."""
 
     raw_path = str(path_str).strip()
     parsed = urlparse(raw_path)
     if parsed.scheme == "s3":
         if parsed.netloc != CPG0016_BUCKET:
             raise ValueError(f"Invalid CPG0016 dataset path: {path_str}")
-        path_parts = [part for part in parsed.path.split("/") if part]
-    else:
-        path_parts = [part for part in raw_path.replace("\\", "/").split("/") if part]
+        return [part for part in parsed.path.split("/") if part]
+    return [part for part in raw_path.replace("\\", "/").split("/") if part]
+
+
+def extract_metadata_from_dataset_path(path_str: str | Path) -> dict[str, str]:
+    """Extract CPG0016 source and batch segments from a dataset path."""
+
+    path_parts = _split_dataset_path_parts(path_str)
 
     try:
         prefix_index = path_parts.index(CPG0016_PREFIX)
-        return path_parts[prefix_index + 1]
+        source = path_parts[prefix_index + 1]
+        if path_parts[prefix_index + 2 : prefix_index + 4] != ["workspace", "analysis"]:
+            raise ValueError
+        batch = path_parts[prefix_index + 4]
     except (ValueError, IndexError) as exc:
         raise ValueError(f"Invalid CPG0016 dataset path: {path_str}") from exc
+
+    return {
+        "Metadata_Source": source,
+        "Metadata_Batch": batch,
+    }
+
+
+def extract_metadata_source_from_dataset_path(path_str: str | Path) -> str:
+    """Extract the CPG0016 source segment from an S3 URL or mirrored local path."""
+
+    return extract_metadata_from_dataset_path(path_str)["Metadata_Source"]
+
+
+def extract_metadata_batch_from_dataset_path(path_str: str | Path) -> str:
+    """Extract the CPG0016 batch segment from an S3 URL or mirrored local path."""
+
+    return extract_metadata_from_dataset_path(path_str)["Metadata_Batch"]
 
 
 def _copy_analysis_csv_set(csv_set: AnalysisCSVSet) -> AnalysisCSVSet:
