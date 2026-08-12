@@ -90,7 +90,19 @@ class AnalysisCSVSet:
     other_local_paths: dict[str, Path] = field(default_factory=dict)
 
     def read_csv(self, filename: str) -> pd.DataFrame:
-        """Read one analysis CSV and overwrite ``Metadata_Source`` from its path."""
+        """Read one analysis CSV and set ``Metadata_Source`` from its dataset path.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to load from this grouped record.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Loaded CSV contents with ``Metadata_Source`` overwritten from the
+            dataset-relative source segment encoded in the S3 or local path.
+        """
 
         local_path = self._get_local_path(filename)
         source_path = self._get_source_path(filename)
@@ -99,18 +111,64 @@ class AnalysisCSVSet:
         return dataframe
 
     def _get_local_path(self, filename: str) -> Path:
+        """Return the local path for one CSV filename or raise if it is unavailable.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        pathlib.Path
+            Local filesystem path for the requested CSV.
+
+        Raises
+        ------
+        ValueError
+            If the requested CSV is not present in this grouped record.
+        """
+
         local_path = self._get_local_path_or_none(filename)
         if local_path is None:
             raise ValueError(f"CSV not available in this analysis set: {filename}")
         return local_path
 
     def _get_source_path(self, filename: str) -> str:
+        """Return the best provenance path for one CSV, preferring the S3 URL.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        str
+            S3 URL when available, otherwise the local filesystem path for the
+            requested CSV.
+        """
+
         s3_url = self._get_s3_url_or_none(filename)
         if s3_url is not None:
             return s3_url
         return str(self._get_local_path(filename))
 
     def _get_local_path_or_none(self, filename: str) -> Optional[Path]:
+        """Return the local path for one CSV filename when present in this set.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        pathlib.Path | None
+            Local filesystem path for the requested CSV, or ``None`` when this
+            grouped record does not include that file.
+        """
+
         if filename == "Image.csv":
             return self.image_local_path
         if filename == "Nuclei.csv":
@@ -122,6 +180,20 @@ class AnalysisCSVSet:
         return self.other_local_paths.get(filename)
 
     def _get_s3_url_or_none(self, filename: str) -> Optional[str]:
+        """Return the S3 URL for one CSV filename when present in this set.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        str | None
+            S3 URL for the requested CSV, or ``None`` when this grouped record
+            does not include a remote URL for that file.
+        """
+
         if filename == "Image.csv":
             return self.image_s3_url
         if filename == "Nuclei.csv":
