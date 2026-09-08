@@ -30,6 +30,24 @@ subset_summary = downloader.download_all_csv_profiles(csv_names=["nuclei", "imag
 print(subset_summary)
 
 
+# Limit downloads to specific dataset sources. Sources must use full names such
+# as ``source_10``.
+source_subset_summary = downloader.download_all_csv_profiles(
+    csv_names=["nuclei"],
+    sources=["source_10"],
+)
+print(source_subset_summary)
+
+
+# Combine CSV-name and source filters when you only need a few profile tables
+# from a few sources.
+multi_source_summary = downloader.download_all_csv_profiles(
+    csv_names=["image", "nuclei"],
+    sources=["source_10", "source_11"],
+)
+print(multi_source_summary)
+
+
 # Reuse the existing local CSV tree later without checking S3 or probing which
 # files already exist remotely.
 local_only_downloader = CPG0016AnalysisCSVDownloader(

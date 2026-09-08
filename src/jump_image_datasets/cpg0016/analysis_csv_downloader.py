@@ -10,6 +10,7 @@ profile files such as ``Image.csv``, ``Nuclei.csv``, ``Cells.csv``, and
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -49,6 +50,7 @@ ANALYSIS_PROFILE_NAME_ALIASES = {
     "cytoplasm": "Cytoplasm.csv",
     "cytoplasm.csv": "Cytoplasm.csv",
 }
+SOURCE_NAME_PATTERN = re.compile(r"^source_[^/]+$")
 
 
 @dataclass(frozen=True)
@@ -88,27 +90,92 @@ class AnalysisCSVSet:
     other_local_paths: dict[str, Path] = field(default_factory=dict)
 
     def read_csv(self, filename: str) -> pd.DataFrame:
-        """Read one analysis CSV and overwrite ``Metadata_Source`` from its path."""
+        """Read one analysis CSV and set path-derived metadata when available.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to load from this grouped record.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Loaded CSV contents with ``Metadata_Source`` and ``Metadata_Batch``
+            overwritten from the dataset path when those segments can be
+            extracted from the S3 or local provenance path.
+        """
 
         local_path = self._get_local_path(filename)
         source_path = self._get_source_path(filename)
         dataframe = pd.read_csv(local_path)
-        dataframe["Metadata_Source"] = extract_metadata_source_from_dataset_path(source_path)
+        try:
+            metadata_values = extract_metadata_from_dataset_path(source_path)
+        except ValueError:
+            return dataframe
+
+        dataframe["Metadata_Source"] = metadata_values["Metadata_Source"]
+        dataframe["Metadata_Batch"] = metadata_values["Metadata_Batch"]
         return dataframe
 
     def _get_local_path(self, filename: str) -> Path:
+        """Return the local path for one CSV filename or raise if it is unavailable.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        pathlib.Path
+            Local filesystem path for the requested CSV.
+
+        Raises
+        ------
+        ValueError
+            If the requested CSV is not present in this grouped record.
+        """
+
         local_path = self._get_local_path_or_none(filename)
         if local_path is None:
             raise ValueError(f"CSV not available in this analysis set: {filename}")
         return local_path
 
     def _get_source_path(self, filename: str) -> str:
+        """Return the best provenance path for one CSV, preferring the S3 URL.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        str
+            S3 URL when available, otherwise the local filesystem path for the
+            requested CSV.
+        """
+
         s3_url = self._get_s3_url_or_none(filename)
         if s3_url is not None:
             return s3_url
         return str(self._get_local_path(filename))
 
     def _get_local_path_or_none(self, filename: str) -> Optional[Path]:
+        """Return the local path for one CSV filename when present in this set.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        pathlib.Path | None
+            Local filesystem path for the requested CSV, or ``None`` when this
+            grouped record does not include that file.
+        """
+
         if filename == "Image.csv":
             return self.image_local_path
         if filename == "Nuclei.csv":
@@ -120,6 +187,20 @@ class AnalysisCSVSet:
         return self.other_local_paths.get(filename)
 
     def _get_s3_url_or_none(self, filename: str) -> Optional[str]:
+        """Return the S3 URL for one CSV filename when present in this set.
+
+        Parameters
+        ----------
+        filename
+            Analysis CSV filename to resolve within this grouped record.
+
+        Returns
+        -------
+        str | None
+            S3 URL for the requested CSV, or ``None`` when this grouped record
+            does not include a remote URL for that file.
+        """
+
         if filename == "Image.csv":
             return self.image_s3_url
         if filename == "Nuclei.csv":
@@ -131,23 +212,48 @@ class AnalysisCSVSet:
         return self.other_s3_urls.get(filename)
 
 
-def extract_metadata_source_from_dataset_path(path_str: str | Path) -> str:
-    """Extract the CPG0016 source segment from an S3 URL or mirrored local path."""
+def _split_dataset_path_parts(path_str: str | Path) -> list[str]:
+    """Return normalized path segments for an S3 URL or mirrored local path."""
 
     raw_path = str(path_str).strip()
     parsed = urlparse(raw_path)
     if parsed.scheme == "s3":
         if parsed.netloc != CPG0016_BUCKET:
             raise ValueError(f"Invalid CPG0016 dataset path: {path_str}")
-        path_parts = [part for part in parsed.path.split("/") if part]
-    else:
-        path_parts = [part for part in raw_path.replace("\\", "/").split("/") if part]
+        return [part for part in parsed.path.split("/") if part]
+    return [part for part in raw_path.replace("\\", "/").split("/") if part]
+
+
+def extract_metadata_from_dataset_path(path_str: str | Path) -> dict[str, str]:
+    """Extract CPG0016 source and batch segments from a dataset path."""
+
+    path_parts = _split_dataset_path_parts(path_str)
 
     try:
         prefix_index = path_parts.index(CPG0016_PREFIX)
-        return path_parts[prefix_index + 1]
+        source = path_parts[prefix_index + 1]
+        if path_parts[prefix_index + 2 : prefix_index + 4] != ["workspace", "analysis"]:
+            raise ValueError
+        batch = path_parts[prefix_index + 4]
     except (ValueError, IndexError) as exc:
         raise ValueError(f"Invalid CPG0016 dataset path: {path_str}") from exc
+
+    return {
+        "Metadata_Source": source,
+        "Metadata_Batch": batch,
+    }
+
+
+def extract_metadata_source_from_dataset_path(path_str: str | Path) -> str:
+    """Extract the CPG0016 source segment from an S3 URL or mirrored local path."""
+
+    return extract_metadata_from_dataset_path(path_str)["Metadata_Source"]
+
+
+def extract_metadata_batch_from_dataset_path(path_str: str | Path) -> str:
+    """Extract the CPG0016 batch segment from an S3 URL or mirrored local path."""
+
+    return extract_metadata_from_dataset_path(path_str)["Metadata_Batch"]
 
 
 def _copy_analysis_csv_set(csv_set: AnalysisCSVSet) -> AnalysisCSVSet:
@@ -258,6 +364,32 @@ def normalize_analysis_csv_filenames(csv_names: Sequence[str] | None) -> tuple[s
     return tuple(normalized_names)
 
 
+def normalize_analysis_sources(sources: Sequence[str] | None) -> tuple[str, ...] | None:
+    """Normalize requested source names to canonical dataset source segments."""
+
+    if sources is None:
+        return None
+
+    normalized_sources: list[str] = []
+    invalid_sources: list[str] = []
+    for source in sources:
+        normalized_source = str(source).strip()
+        if not SOURCE_NAME_PATTERN.fullmatch(normalized_source):
+            invalid_sources.append(str(source))
+            continue
+        if normalized_source not in normalized_sources:
+            normalized_sources.append(normalized_source)
+
+    if invalid_sources:
+        invalid_display = ", ".join(repr(source) for source in invalid_sources)
+        raise ValueError(
+            "Invalid analysis sources: "
+            f"{invalid_display}. Sources must match the dataset path segment format, for example 'source_10'."
+        )
+
+    return tuple(normalized_sources)
+
+
 def build_analysis_csv_sets_from_s3_urls(
     s3_urls: list[str],
     *,
@@ -331,10 +463,18 @@ def build_analysis_csv_sets_from_local_paths(
     return csv_sets
 
 
-def _build_analysis_csv_include_patterns(csv_filenames: Sequence[str]) -> list[str]:
+def _build_analysis_csv_include_patterns(
+    csv_filenames: Sequence[str],
+    sources: Sequence[str] | None = None,
+) -> list[str]:
     """Build AWS CLI include patterns for the requested analysis CSV filenames."""
 
-    return [f"source_*/workspace/analysis/**/{filename}" for filename in csv_filenames]
+    source_patterns = tuple(sources) if sources is not None else ("source_*",)
+    return [
+        f"{source_pattern}/workspace/analysis/**/{filename}"
+        for source_pattern in source_patterns
+        for filename in csv_filenames
+    ]
 
 
 def _create_aws_cli_config(max_concurrent_requests: int) -> str:
@@ -467,7 +607,11 @@ class CPG0016AnalysisCSVDownloader:
         for csv_set in self.analysis_csv_sets:
             yield _copy_analysis_csv_set(csv_set)
 
-    def download_all_csv_profiles(self, csv_names: Sequence[str] | None = None) -> DownloadSummary:
+    def download_all_csv_profiles(
+        self,
+        csv_names: Sequence[str] | None = None,
+        sources: Sequence[str] | None = None,
+    ) -> DownloadSummary:
         """Download analysis CSV files into ``output_dir`` with the AWS CLI.
 
         This method uses the AWS CLI transfer manager against the public
@@ -482,6 +626,10 @@ class CPG0016AnalysisCSVDownloader:
             names such as ``image`` or ``nuclei`` as well as full filenames such
             as ``Image.csv`` and ``Nuclei.csv``. When omitted, all standard
             profile CSVs are downloaded.
+        sources
+            Optional subset of dataset source path segments to download, for
+            example ``["source_10", "source_11"]``. When omitted, all
+            non-``source_all`` sources are eligible.
 
         Returns
         -------
@@ -494,10 +642,18 @@ class CPG0016AnalysisCSVDownloader:
             return DownloadSummary(total_jobs=0, downloaded=0, skipped=0, failed=0, failures=[])
 
         requested_filenames = tuple(normalize_analysis_csv_filenames(csv_names))
+        requested_sources = normalize_analysis_sources(sources)
         requested_filename_set = set(requested_filenames)
-        preexisting_paths = self._discover_local_analysis_csv_paths(requested_filename_set)
-        self._run_aws_analysis_csv_download(requested_filenames)
-        post_download_paths = self._discover_local_analysis_csv_paths(requested_filename_set)
+        requested_source_set = set(requested_sources) if requested_sources is not None else None
+        preexisting_paths = self._discover_local_analysis_csv_paths(
+            requested_filenames=requested_filename_set,
+            requested_sources=requested_source_set,
+        )
+        self._run_aws_analysis_csv_download(requested_filenames, requested_sources)
+        post_download_paths = self._discover_local_analysis_csv_paths(
+            requested_filenames=requested_filename_set,
+            requested_sources=requested_source_set,
+        )
 
         self.analysis_csv_urls = [self._local_analysis_csv_path_to_s3_url(path) for path in post_download_paths]
         self.analysis_csv_sets = build_analysis_csv_sets_from_s3_urls(
@@ -519,6 +675,7 @@ class CPG0016AnalysisCSVDownloader:
     def _discover_local_analysis_csv_paths(
         self,
         requested_filenames: Optional[set[str]] = None,
+        requested_sources: Optional[set[str]] = None,
     ) -> list[Path]:
         """Discover local analysis CSV files under ``output_dir``."""
 
@@ -531,6 +688,11 @@ class CPG0016AnalysisCSVDownloader:
             for local_path in sorted(analysis_root.rglob("workspace/analysis/**/*.csv"))
             if not is_source_all_path(local_path.relative_to(self.output_dir).as_posix())
             and (requested_filenames is None or local_path.name in requested_filenames)
+            and (
+                requested_sources is None
+                or extract_metadata_source_from_dataset_path(local_path.relative_to(self.output_dir))
+                in requested_sources
+            )
         ]
         return local_paths
 
@@ -540,7 +702,11 @@ class CPG0016AnalysisCSVDownloader:
         relative_path = local_path.relative_to(self.output_dir).as_posix().lstrip("/")
         return f"s3://{CPG0016_BUCKET}/{relative_path}"
 
-    def _run_aws_analysis_csv_download(self, requested_filenames: Sequence[str]) -> None:
+    def _run_aws_analysis_csv_download(
+        self,
+        requested_filenames: Sequence[str],
+        requested_sources: Sequence[str] | None,
+    ) -> None:
         """Download the requested analysis CSVs with the AWS CLI transfer manager."""
 
         aws_path = shutil.which("aws")
@@ -564,7 +730,10 @@ class CPG0016AnalysisCSVDownloader:
             "--exclude",
             "source_all/*",
         ]
-        for include_pattern in _build_analysis_csv_include_patterns(requested_filenames):
+        for include_pattern in _build_analysis_csv_include_patterns(
+            requested_filenames,
+            requested_sources,
+        ):
             command.extend(["--include", include_pattern])
         command.extend(["--no-sign-request", "--only-show-errors"])
 

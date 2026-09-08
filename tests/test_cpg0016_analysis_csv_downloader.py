@@ -297,6 +297,74 @@ def test_download_all_csv_profiles_can_filter_requested_csvs(tmp_path, monkeypat
     ).exists()
 
 
+def test_download_all_csv_profiles_can_filter_requested_sources(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "downloads"
+
+    def side_effect(command, env, capture_output) -> None:
+        assert command.count("--include") == 1
+        assert "source_10/workspace/analysis/**/Nuclei.csv" in command
+        assert "source_*/workspace/analysis/**/Nuclei.csv" not in command
+        _write_downloaded_csv(
+            output_dir,
+            "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Nuclei.csv",
+        )
+        _write_downloaded_csv(
+            output_dir,
+            "cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Nuclei.csv",
+        )
+
+    _install_fake_aws(monkeypatch, side_effect=side_effect)
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=output_dir,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    summary = downloader.download_all_csv_profiles(csv_names=["nuclei"], sources=["source_10"])
+
+    assert summary.total_jobs == 1
+    assert summary.downloaded == 1
+    assert all("source_10" in str(csv_set.folder_relative_path) for csv_set in downloader.get_analysis_csv_sets())
+
+
+def test_download_all_csv_profiles_can_filter_multiple_sources(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "downloads"
+
+    def side_effect(command, env, capture_output) -> None:
+        assert command.count("--include") == 2
+        assert "source_10/workspace/analysis/**/Image.csv" in command
+        assert "source_11/workspace/analysis/**/Image.csv" in command
+        assert "source_*/workspace/analysis/**/Image.csv" not in command
+        _write_downloaded_csv(
+            output_dir,
+            "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv",
+        )
+        _write_downloaded_csv(
+            output_dir,
+            "cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Image.csv",
+        )
+
+    _install_fake_aws(monkeypatch, side_effect=side_effect)
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=output_dir,
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    summary = downloader.download_all_csv_profiles(csv_names=["image"], sources=["source_10", "source_11"])
+
+    assert summary.total_jobs == 2
+    assert summary.downloaded == 2
+    assert {csv_set.read_csv("Image.csv").loc[0, "Metadata_Source"] for csv_set in downloader.iter_analysis_csv_sets()} == {
+        "source_10",
+        "source_11",
+    }
+
+
 def test_download_all_csv_profiles_accepts_mixed_csv_name_forms(tmp_path, monkeypatch) -> None:
     output_dir = tmp_path / "downloads"
 
@@ -328,6 +396,20 @@ def test_download_all_csv_profiles_accepts_mixed_csv_name_forms(tmp_path, monkey
     assert summary.downloaded == 2
 
 
+def test_download_all_csv_profiles_rejects_invalid_source_names(tmp_path, monkeypatch) -> None:
+    _install_fake_aws(monkeypatch)
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+    )
+
+    with pytest.raises(ValueError, match="Invalid analysis sources: '10', 'source/10'"):
+        downloader.download_all_csv_profiles(csv_names=["image"], sources=["10", "source/10"])
+
+
 def test_download_all_csv_profiles_rejects_invalid_csv_names(tmp_path, monkeypatch) -> None:
     _install_fake_aws(monkeypatch)
 
@@ -342,14 +424,37 @@ def test_download_all_csv_profiles_rejects_invalid_csv_names(tmp_path, monkeypat
         downloader.download_all_csv_profiles(csv_names=["not_a_csv"])
 
 
-def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_path, monkeypatch) -> None:
+def test_discover_local_analysis_csv_paths_can_filter_requested_sources(tmp_path) -> None:
+    _copy_test_csv_tree(tmp_path / "downloads")
+
+    downloader = analysis_csv_downloader.CPG0016AnalysisCSVDownloader(
+        output_dir=tmp_path / "downloads",
+        parallel=False,
+        workers=1,
+        verbose=False,
+        use_existing_csvs_without_s3_check=True,
+    )
+
+    local_paths = downloader._discover_local_analysis_csv_paths(
+        requested_filenames={"Image.csv", "Nuclei.csv", "Cells.csv"},
+        requested_sources={"source_10"},
+    )
+
+    assert local_paths
+    assert all("/source_10/" in path.as_posix() for path in local_paths)
+    assert all("source_all" not in path.as_posix() for path in local_paths)
+
+
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_and_batch_from_s3_path(
+    tmp_path, monkeypatch
+) -> None:
     output_dir = tmp_path / "downloads"
 
     def side_effect(command, env, capture_output) -> None:
         _write_downloaded_csv(
             output_dir,
             "cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1/Image.csv",
-            "ImageNumber,Metadata_Source\n1,wrong_source\n",
+            "ImageNumber,Metadata_Source,Metadata_Batch\n1,wrong_source,wrong_batch\n",
         )
 
     _install_fake_aws(monkeypatch, side_effect=side_effect)
@@ -366,6 +471,7 @@ def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_s3_path(tmp_p
     dataframe = csv_set.read_csv("Image.csv")
 
     assert dataframe.loc[0, "Metadata_Source"] == "source_10"
+    assert dataframe.loc[0, "Metadata_Batch"] == "run_a"
 
 
 def test_download_all_csv_profiles_reports_existing_files_as_skipped(tmp_path, monkeypatch) -> None:
@@ -484,13 +590,15 @@ def test_local_only_mode_uses_existing_downloads_without_s3(tmp_path, monkeypatc
     assert summary.skipped == 0
 
 
-def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_local_path(tmp_path, monkeypatch) -> None:
+def test_analysis_csv_set_read_csv_overwrites_metadata_source_and_batch_from_local_path(
+    tmp_path, monkeypatch
+) -> None:
     local_image = (
         tmp_path
         / "downloads/cpg0016-jump/source_11/workspace/analysis/run_b/plate_b/analysis/plate_b-B03-2/Image.csv"
     )
     local_image.parent.mkdir(parents=True, exist_ok=True)
-    local_image.write_text("ImageNumber,Metadata_Source\n1,wrong_source\n")
+    local_image.write_text("ImageNumber,Metadata_Source,Metadata_Batch\n1,wrong_source,wrong_batch\n")
 
     monkeypatch.setattr(
         analysis_csv_downloader.s3fs,
@@ -510,6 +618,38 @@ def test_analysis_csv_set_read_csv_overwrites_metadata_source_from_local_path(tm
     dataframe = csv_set.read_csv("Image.csv")
 
     assert dataframe.loc[0, "Metadata_Source"] == "source_11"
+    assert dataframe.loc[0, "Metadata_Batch"] == "run_b"
+
+
+def test_analysis_csv_set_read_csv_skips_metadata_columns_for_malformed_s3_path(monkeypatch) -> None:
+    local_image = Path("/tmp/nonexistent-image.csv")
+    csv_set = analysis_csv_downloader.AnalysisCSVSet(
+        folder_relative_path=Path("cpg0016-jump/source_10/workspace/analysis/run_a/plate_a/analysis/plate_a-A01-1"),
+        folder_local_path=local_image.parent,
+        image_local_path=local_image,
+        image_s3_url="s3://cellpainting-gallery/cpg0016-jump/source_10/bad/run_a/Image.csv",
+    )
+
+    dataframe = analysis_csv_downloader.pd.DataFrame({"ImageNumber": [1]})
+    monkeypatch.setattr(
+        analysis_csv_downloader.pd,
+        "read_csv",
+        lambda path: dataframe.copy(deep=True),
+    )
+
+    result = csv_set.read_csv("Image.csv")
+
+    assert "Metadata_Source" not in result.columns
+    assert "Metadata_Batch" not in result.columns
+
+
+def test_extract_metadata_batch_from_dataset_path_reads_analysis_batch_segment() -> None:
+    assert (
+        analysis_csv_downloader.extract_metadata_batch_from_dataset_path(
+            "s3://cellpainting-gallery/cpg0016-jump/source_10/workspace/analysis/20211103-Run16/GR00004416/analysis/GR00004416-A01-3/Image.csv"
+        )
+        == "20211103-Run16"
+    )
 
 
 def test_constructor_requires_output_dir() -> None:
